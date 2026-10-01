@@ -44,6 +44,9 @@
 #define DIALOG_ADMIN_CODE_NOTICE 15003
 #define DIALOG_RENT 15004
 #define DIALOG_DOSIJE 15005
+#define DIALOG_ADMIN_HELP 15006
+#define DIALOG_ADMIN_CHECK 15007
+#define DIALOG_PRAVILA 15008
 #define MAX_TRAFIKA 50 // Možeš staviti koliki god maksimalan broj trafika želiš
 #define DIALOG_TRAFIKA         100 // Možeš staviti bilo koji slobodan broj koji se ne poklapa sa drugim
 #define DIALOG_TRAFIKA_SOK     101
@@ -79,6 +82,9 @@ new PlayerMinute[MAX_PLAYERS];
 new LastOglasTick;
 new PlayerSat[MAX_PLAYERS];
 new IgracKrediti[MAX_PLAYERS];
+new HappyHourMultiplier = 1;
+#define MEDICAL_TREATMENT_PRICE 500
+#define STATS_SETTINGS_FILE "BalkanRP/StatsSettings.ini"
 new kapija_parking;
 new bool:BigEar[MAX_PLAYERS];
 new bool:ScriptJetpack[MAX_PLAYERS];
@@ -133,6 +139,10 @@ new PendingDeathWanted[MAX_PLAYERS];
 new DeathPenaltySerial[MAX_PLAYERS];
 new WantedReason[MAX_PLAYERS][64];
 new PlayerText:TD_WantedHint[MAX_PLAYERS];
+new PlayerText:TD_WantedStars[MAX_PLAYERS];
+new PlayerText:TD_WantedPolice[MAX_PLAYERS];
+new PlayerText:TD_WantedDosije[MAX_PLAYERS];
+new bool:WantedHintBlinkVisible[MAX_PLAYERS];
 new BankLaserLastCheck[MAX_PLAYERS];
 new BankLaserLastAlert[MAX_PLAYERS];
 new bool:BankLaserPrevValid[MAX_PLAYERS];
@@ -140,22 +150,26 @@ new Float:BankLaserPrevX[MAX_PLAYERS], Float:BankLaserPrevY[MAX_PLAYERS], Float:
 
 new PlayerOrg[MAX_PLAYERS];
 new bool:IsHealing[MAX_PLAYERS];
+new SafeTeleportSerial[MAX_PLAYERS];
 new PlayerCurrentSkin[MAX_PLAYERS];
 
 
 
 // HUD: zajednicki dijelovi se prave jednom, podaci posebno za svakog igraca.
 // Elementi HUD-a direktno iz korisnikovog DTD.pwn exporta.
-new Text:TD_DTD[61];
-new PlayerText:TD_Vozilo[MAX_PLAYERS][8];
+new Text:TD_DTD[63];
+new PlayerText:TD_Vozilo[MAX_PLAYERS][12];
 new bool:VoziloHudShown[MAX_PLAYERS];
+new bool:VehicleHudTruckLayout[MAX_PLAYERS];
 new bool:VehicleHudInitialized[MAX_VEHICLES], bool:VehicleHudOutOfFuel[MAX_VEHICLES];
 new Float:VehicleHudFuel[MAX_VEHICLES], Float:VehicleHudKm[MAX_VEHICLES];
 new Float:VehicleHudLastX[MAX_VEHICLES], Float:VehicleHudLastY[MAX_VEHICLES], Float:VehicleHudLastZ[MAX_VEHICLES];
 new bool:VehicleHudLastPosValid[MAX_VEHICLES];
 new VehicleHudLastSpeed[MAX_PLAYERS];
 new VehicleHudNextStartTry[MAX_VEHICLES], VehicleHudNextStallAt[MAX_VEHICLES];
+new VehicleHudLastDamage[MAX_VEHICLES];
 new bool:VehicleHudBrokenNotice[MAX_VEHICLES], bool:VehicleHudStalled[MAX_VEHICLES];
+new bool:AdminSpawnedVehicle[MAX_VEHICLES];
 new VehicleHudModelNames[212][] = {
     "Landstalker",
     "Bravura",
@@ -382,6 +396,14 @@ new PlayerText:TD_HudVrijeme[MAX_PLAYERS];
 
 new LastHudMinute[MAX_PLAYERS];
 new Text3D:AdminText[MAX_PLAYERS] = {Text3D:INVALID_3DTEXT_ID, ...};
+new JuniorMutedUntil[MAX_PLAYERS], JuniorJailedUntil[MAX_PLAYERS];
+new bool:JuniorFrozen[MAX_PLAYERS], bool:JuniorSpectating[MAX_PLAYERS];
+new Float:JuniorSpecX[MAX_PLAYERS], Float:JuniorSpecY[MAX_PLAYERS], Float:JuniorSpecZ[MAX_PLAYERS];
+new JuniorSpecInterior[MAX_PLAYERS], JuniorSpecWorld[MAX_PLAYERS];
+new bool:JuniorGlobalChatLocked, bool:JuniorAdsMuted, bool:JuniorAskMuted, bool:JuniorReportsMuted;
+new bool:JuniorEventActive;
+new Float:JuniorEventX, Float:JuniorEventY, Float:JuniorEventZ;
+new JuniorEventInterior, JuniorEventWorld;
 new Text3D:HelperLabel[MAX_PLAYERS] = {Text3D:INVALID_3DTEXT_ID, ...};
 // Pamcenje da li igrac radi turu i na kom je koraku
 new IsDoingPosta[MAX_PLAYERS];
@@ -920,12 +942,18 @@ public OnGameModeInit()
 	SetTimer("GladSystemTimer", 180000, true);
     SetTimer("TajmerZaMinute", 60000, true); // 60000 ms = 1 minuta
     SetTimer("ServerTipsTimer", 300000, true);
-    SetTimer("GlobalniPayDay", 3600000, true);
     SetTimer("CheckTemporaryNames", 60000, true);
     SetTimer("RentTick", 1000, true);
     SetTimer("UpdateLocationDisplays", 2000, true);
     SetTimer("UpdateVehicleHud", 500, true);
     SetTimer("UpdateVehicleSpeed", 150, true);
+    SetTimer("JuniorAdminTick", 1000, true);
+    if(DOF2_FileExists(STATS_SETTINGS_FILE))
+    {
+        HappyHourMultiplier = DOF2_GetInt(STATS_SETTINGS_FILE, "HappyHourMultiplier");
+        if(HappyHourMultiplier != 2 && HappyHourMultiplier != 4 && HappyHourMultiplier != 8)
+            HappyHourMultiplier = 1;
+    }
     AddPlayerClass(0, 1685.8652, -2331.2102, 13.5469, 90.2917, 0, 0, 0, 0, 0, 0);
     InitRevolutionHud();
     UpdateHudTip(random(29));
@@ -1117,6 +1145,14 @@ public OnGameModeInit()
 }
 public OnPlayerConnect(playerid)
 {
+    new connectDutyFile[128], connectDutyName[MAX_PLAYER_NAME];
+    GetPlayerName(playerid, connectDutyName, sizeof(connectDutyName));
+    format(connectDutyFile, sizeof(connectDutyFile), "Korisnici/%s.ini", connectDutyName);
+    if(DOF2_FileExists(connectDutyFile))
+    {
+        DOF2_SetInt(connectDutyFile, "AdminDuty", 0);
+        DOF2_SaveFile();
+    }
     BankMoneyBag[playerid] = false;
     JetpackDropGuardUntil[playerid] = 0;
     SetPVarInt(playerid, "BR_LoggedIn", 0);
@@ -1134,6 +1170,10 @@ public OnPlayerConnect(playerid)
     HasMapMarker[playerid] = false;
     MapTeleportSerial[playerid]++;
     ScriptJetpack[playerid] = false;
+    JuniorMutedUntil[playerid] = 0;
+    JuniorJailedUntil[playerid] = 0;
+    JuniorFrozen[playerid] = false;
+    JuniorSpectating[playerid] = false;
     RentPlayerVehicle[playerid] = 0;
     RentPendingVehicle[playerid] = 0;
     RentExpiresAt[playerid] = 0;
@@ -1165,6 +1205,8 @@ public OnPlayerConnect(playerid)
     PlayAudioStreamForPlayer(playerid, "https://a7.asurahosting.com/listen/balkan_radio_hit/radio.mp3");
     IntroKorak[playerid] = 0;
     PlayerZlato[playerid] = 0;
+    PlayerRespekti[playerid] = 0;
+    PlayerMinute[playerid] = 0;
 
     // Resetujemo admin labelu pri konekciji da je cista
     AdminText[playerid] = Text3D:INVALID_3DTEXT_ID;
@@ -1195,6 +1237,16 @@ public KickPlayerDelayed(playerid)
 
 public OnPlayerDisconnect(playerid, reason)
 {
+    new dutyFile[128], dutyName[MAX_PLAYER_NAME];
+    GetPlayerName(playerid, dutyName, sizeof(dutyName));
+    format(dutyFile, sizeof(dutyFile), "Korisnici/%s.ini", dutyName);
+    if(DOF2_FileExists(dutyFile))
+    {
+        DOF2_SetInt(dutyFile, "AdminDuty", 0);
+        DOF2_SaveFile();
+    }
+
+    SafeTeleportSerial[playerid]++; // Ponistava eventualni stari timer ucitavanja za ovaj slot.
     ApplyPendingDeathPenalty(playerid, false);
     DeathPenaltySerial[playerid]++;
     JetpackDropGuardUntil[playerid] = 0;
@@ -1224,6 +1276,10 @@ public OnPlayerDisconnect(playerid, reason)
             DOF2_SetInt(file, "Novac", GetPlayerMoney(playerid));
             DOF2_SetInt(file, "DosijeWanted", WantedPoints[playerid]);
             DOF2_SetString(file, "DosijeRazlog", WantedReason[playerid]);
+            DOF2_SetInt(file, "MinuteIgranja", PlayerMinute[playerid]);
+            DOF2_SetInt(file, "Respekti", PlayerRespekti[playerid]);
+            if(WantedPoints[playerid] > 0)
+                DOF2_SetInt(file, "DosijeLTA", DOF2_GetInt(file, "DosijeLTA") + 1);
         }
         DOF2_SetInt(file, "AdminDuty", 0);
         DOF2_SetInt(file, "Lider", PlayerInfo[playerid][pLider]);
@@ -1237,9 +1293,35 @@ public OnPlayerDisconnect(playerid, reason)
 
     return 1;
 }
+forward FinishSafeTeleport(playerid, serial);
+public FinishSafeTeleport(playerid, serial)
+{
+    if(!IsPlayerConnected(playerid) || serial != SafeTeleportSerial[playerid]) return 1;
+    Streamer_Update(playerid);
+    SetCameraBehindPlayer(playerid);
+    if(!IsHealing[playerid] && !JuniorFrozen[playerid]) TogglePlayerControllable(playerid, 1);
+    return 1;
+}
+
+stock SafeTeleportPlayer(playerid, Float:x, Float:y, Float:z, interior, world, Float:angle = -999.0)
+{
+    if(!IsPlayerConnected(playerid)) return 0;
+    SafeTeleportSerial[playerid]++;
+    TogglePlayerControllable(playerid, 0);
+    SetPlayerInterior(playerid, interior);
+    SetPlayerVirtualWorld(playerid, world);
+    SetPlayerPos(playerid, x, y, z);
+    if(angle > -998.0) SetPlayerFacingAngle(playerid, angle);
+    Streamer_UpdateEx(playerid, x, y, z, world, interior, -1, 0, 0);
+    SetCameraBehindPlayer(playerid);
+    SetTimerEx("FinishSafeTeleport", 900, false, "ii", playerid, SafeTeleportSerial[playerid]);
+    return 1;
+}
+
 public OnPlayerSpawn(playerid)
 {
     ScriptJetpack[playerid] = false;
+    SetTimerEx("ApplySpawnHealth", 1000, false, "i", playerid);
     // GTA wanted level se resetuje tek nakon sto se zavrsi respawn.
     SetTimerEx("FinishSpawnWantedReset", 750, false, "ii", playerid, DeathPenaltySerial[playerid]);
     if(PendingDeathFine[playerid] > 0)
@@ -1247,9 +1329,8 @@ public OnPlayerSpawn(playerid)
     // Ako je igrac umro i nalazi se na lecenju u bolnici 5 sekundi (skin se ne mijenja)
     if(IsHealing[playerid])
     {
-        // Bolnicka pozicija i skin su postavljeni prije respawna u OnPlayerDeath.
-        SetPlayerInterior(playerid, 0);
-        SetPlayerVirtualWorld(playerid, 0);
+        // Klijent i streamer dobijaju vrijeme da ucitaju pod bolnice prije kretanja.
+        SafeTeleportPlayer(playerid, -20.6776, 1481.3562, -3.3132, 0, 0, 179.0601);
 
         SendClientMessage(playerid, 0xFF0000FF, "[BOLNICA]: Nalazite se na lecenju 5 sekundi...");
         GameTextForPlayer(playerid, "~r~Lijecenje u toku...~n~~w~Trajanje: ~g~5 sekundi", 5000, 3);
@@ -1337,38 +1418,23 @@ public OnPlayerSpawn(playerid)
 
     if(orgid == 1)
     {
-        SetPlayerPos(playerid, 230.6200, 75.2964, 1005.0391);
-        SetPlayerFacingAngle(playerid, 270.3857);
-        SetPlayerInterior(playerid, 6);
-        SetPlayerVirtualWorld(playerid, 0);
+        SafeTeleportPlayer(playerid, 230.6200, 75.2964, 1005.0391, 6, 0, 270.3857);
     }
     else if(orgid == 4)
     {
-        SetPlayerPos(playerid, 1754.1577, -1903.0061, 13.5634);
-        SetPlayerFacingAngle(playerid, 0.0);
-        SetPlayerInterior(playerid, 0);
-        SetPlayerVirtualWorld(playerid, 0);
+        SafeTeleportPlayer(playerid, 1754.1577, -1903.0061, 13.5634, 0, 0, 0.0);
     }
     else if(orgid == 5)
     {
-        SetPlayerPos(playerid, -13.7780, 1465.4548, -3.2142);
-        SetPlayerFacingAngle(playerid, 3.1334);
-        SetPlayerInterior(playerid, 0);
-        SetPlayerVirtualWorld(playerid, 0);
+        SafeTeleportPlayer(playerid, -13.7780, 1465.4548, -3.2142, 0, 0, 3.1334);
     }
     else if(orgid == 7)
     {
-        SetPlayerPos(playerid, 1072.9264, -878.3057, 43.3932);
-        SetPlayerFacingAngle(playerid, 0.0);
-        SetPlayerInterior(playerid, 0);
-        SetPlayerVirtualWorld(playerid, 0);
+        SafeTeleportPlayer(playerid, 1072.9264, -878.3057, 43.3932, 0, 0, 0.0);
     }
     else
     {
-        SetPlayerPos(playerid, 1685.8652, -2331.2102, 13.5469);
-        SetPlayerFacingAngle(playerid, 90.2917);
-        SetPlayerInterior(playerid, 0);
-        SetPlayerVirtualWorld(playerid, 0);
+        SafeTeleportPlayer(playerid, 1685.8652, -2331.2102, 13.5469, 0, 0, 90.2917);
     }
 
     ClearAnimations(playerid);
@@ -1561,6 +1627,7 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
                     SpawnPlayer(playerid);
                     PrikaziPorukuDobrodoslice(playerid);
                     SetPVarInt(playerid, "BR_LoggedIn", 1);
+                    SetTimerEx("JuniorApplyPenalties", 750, false, "i", playerid);
                     LoadWantedState(playerid);
                 }
                 else
@@ -1616,13 +1683,41 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
             DOF2_SetInt(file, "Euro", 0);
             DOF2_SetInt(file, "Zlato", 0);
             DOF2_SetInt(file, "Krediti", 0);
+            DOF2_SetInt(file, "Respekti", 0);
+            DOF2_SetInt(file, "Sati", 0);
+            DOF2_SetInt(file, "MinuteIgranja", 0);
+            DOF2_SetInt(file, "Upozorenja", 0);
+            DOF2_SetInt(file, "Osiguranja", 0);
+            DOF2_SetInt(file, "RolePlayRank", 0);
+            DOF2_SetInt(file, "DonatePoeni", 0);
+            DOF2_SetInt(file, "DosijeUbistva", 0);
+            DOF2_SetInt(file, "DosijeSmrti", 0);
+            DOF2_SetInt(file, "DosijeZlocini", 0);
+            DOF2_SetInt(file, "DosijeUhapsen", 0);
+            DOF2_SetInt(file, "DosijeTiketi", 0);
+            DOF2_SetInt(file, "DosijeLTA", 0);
+            DOF2_SetInt(file, "AdminKazne", 0);
+            DOF2_SetInt(file, "BolestanDo", 0);
+            DOF2_SetInt(file, "Kuca", -1);
+            DOF2_SetInt(file, "Bizz", -1);
+            DOF2_SetInt(file, "Vozilo1", -1);
+            DOF2_SetInt(file, "Vozilo2", -1);
+            DOF2_SetInt(file, "VoziloDonator", -1);
+            new regYear, regMonth, regDay, regHour, regMinute, regSecond, registration[32];
+            getdate(regYear, regMonth, regDay);
+            gettime(regHour, regMinute, regSecond);
+            format(registration, sizeof(registration), "%02d.%02d.%04d | %02d:%02d:%02d", regDay, regMonth, regYear, regHour, regMinute, regSecond);
+            DOF2_SetString(file, "Registrovan", registration);
             DOF2_SaveFile();
             SetPlayerScore(playerid, 1);
             ResetPlayerMoney(playerid);
             GivePlayerMoney(playerid, 5000);
             SetPVarInt(playerid, "BR_LoggedIn", 1);
+            SetTimerEx("JuniorApplyPenalties", 750, false, "i", playerid);
             LoadWantedState(playerid);
             PlayerZlato[playerid] = 0;
+            PlayerRespekti[playerid] = 0;
+            PlayerMinute[playerid] = 0;
             IgracKrediti[playerid] = 0;
             UpdateZlatoTD(playerid);
             UpdateBankaTD(playerid, 0);
@@ -1715,6 +1810,7 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
                     SpawnPlayer(playerid);
                     PrikaziPorukuDobrodoslice(playerid);
                     SetPVarInt(playerid, "BR_LoggedIn", 1);
+                    SetTimerEx("JuniorApplyPenalties", 750, false, "i", playerid);
                     LoadWantedState(playerid);
                 }
                 else
@@ -1753,6 +1849,7 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
                     SpawnPlayer(playerid);
                     PrikaziPorukuDobrodoslice(playerid);
                     SetPVarInt(playerid, "BR_LoggedIn", 1);
+                    SetTimerEx("JuniorApplyPenalties", 750, false, "i", playerid);
                     LoadWantedState(playerid);
                 }
                 else
@@ -2433,284 +2530,194 @@ CMD:mp3(playerid, params[])
 }
 CMD:stats(playerid, params[])
 {
-    new string[4000], s1[450], s2[450], s3[450], s4[450], s5[450], s6[450], s7[400], s7_1[400];
-    new ime[MAX_PLAYER_NAME], file[128], pol[16], drzava[32], telefon_str[32], broj_tel_str[32];
-    new level, novac, banka, euro, zlato, godine, respekti, potrebni_respekti, sati, kuca, bizz, broj_telefona, player_job;
+    #pragma unused params
+    if(!GetPVarInt(playerid, "BR_LoggedIn"))
+        return SendClientMessage(playerid, 0xFF7777FF, "[STATS]: Prvo se prijavite na nalog.");
 
-    GetPlayerName(playerid, ime, sizeof(ime));
-    format(file, sizeof(file), "Korisnici/%s.ini", ime);
+    new file[128], name[MAX_PLAYER_NAME];
+    GetPlayerName(playerid, name, sizeof(name));
+    if(!GetPlayerAccountPath(playerid, file, sizeof(file)))
+        return SendClientMessage(playerid, 0xFF7777FF, "[STATS]: Vas korisnicki fajl nije pronadjen.");
 
-    // Ucitavanje osnovnih podataka, imovine, posla i banke iz .ini fajla
-    level = DOF2_GetInt(file, "Level");
-    novac = DOF2_GetInt(file, "Novac");
-    banka = DOF2_GetInt(file, "Banka"); // Ovdje ucitavamo stanje u banci
-    euro = DOF2_IsSet(file, "Euro") ? DOF2_GetInt(file, "Euro") : 0;
-    respekti = DOF2_GetInt(file, "Respekti");
-    sati = DOF2_GetInt(file, "Sati");
-    player_job = DOF2_GetInt(file, "Posao"); // Ucitavamo ID posla
+    new level = DOF2_GetInt(file, "Level");
+    if(level < 1) level = 1;
+    new respects = DOF2_GetInt(file, "Respekti");
+    new needed = level * 4;
+    new hours = DOF2_GetInt(file, "Sati");
+    new minutes = PlayerMinute[playerid];
+    new bank = DOF2_GetInt(file, "Banka");
+    new euro = DOF2_GetInt(file, "Euro");
+    new gold = DOF2_GetInt(file, "Zlato");
+    new credits = DOF2_GetInt(file, "Krediti");
+    new warnings = DOF2_GetInt(file, "Upozorenja");
+    new insurance = DOF2_GetInt(file, "Osiguranja");
+    new roleplayRank = DOF2_GetInt(file, "RolePlayRank");
+    new donatePoints = DOF2_GetInt(file, "DonatePoeni");
+    new adminPunishments = DOF2_GetInt(file, "AdminKazne");
+    new muteSeconds = DOF2_GetInt(file, "AdminMuteUntil") - gettime();
+    if(muteSeconds < 0) muteSeconds = 0;
+    new muteMinutes = (muteSeconds + 59) / 60;
 
-    // Povlacimo zlato direktno iz memorije (PlayerZlato varijable)
-    zlato = PlayerZlato[playerid];
+    new phone[32], phoneNumber[24], country[32], gender[12], registered[40], marriage[MAX_PLAYER_NAME];
+    if(DOF2_IsSet(file, "Telefon")) format(phone, sizeof(phone), "%s", DOF2_GetString(file, "Telefon"));
+    else format(phone, sizeof(phone), "Nema");
+    if(DOF2_IsSet(file, "BrojTelefona") && DOF2_GetInt(file, "BrojTelefona") > 0)
+        format(phoneNumber, sizeof(phoneNumber), "%d", DOF2_GetInt(file, "BrojTelefona"));
+    else format(phoneNumber, sizeof(phoneNumber), "Nema");
+    if(DOF2_IsSet(file, "Drzava")) format(country, sizeof(country), "%s", DOF2_GetString(file, "Drzava"));
+    else format(country, sizeof(country), "Nepoznato");
+    if(DOF2_GetInt(file, "Pol") == 0) format(gender, sizeof(gender), "Musko");
+    else format(gender, sizeof(gender), "Zensko");
+    if(DOF2_IsSet(file, "Registrovan")) format(registered, sizeof(registered), "%s", DOF2_GetString(file, "Registrovan"));
+    else format(registered, sizeof(registered), "Nepoznato");
+    if(DOF2_IsSet(file, "Brak")) format(marriage, sizeof(marriage), "%s", DOF2_GetString(file, "Brak"));
+    else format(marriage, sizeof(marriage), "Ni sa kim");
 
-    // Sigurna provjera ostalih kljuceva da ne vracaju pogrešnu nulu
-    if(DOF2_IsSet(file, "Godine")) godine = DOF2_GetInt(file, "Godine"); else godine = 18;
-    if(DOF2_IsSet(file, "Kuca")) kuca = DOF2_GetInt(file, "Kuca"); else kuca = -1;
-    if(DOF2_IsSet(file, "Bizz")) bizz = DOF2_GetInt(file, "Bizz"); else bizz = -1;
-
-    // Dinamicka provjera telefona iz fajla (ako nema setovano, piše "Nema")
-    if(DOF2_IsSet(file, "Telefon"))
-    {
-        format(telefon_str, sizeof(telefon_str), "%s", DOF2_GetString(file, "Telefon"));
-    }
-    else
-    {
-        format(telefon_str, sizeof(telefon_str), "Nema");
-    }
-
-    // Dinamicka provjera broja telefona iz fajla (ako nema setovano, piše "Nema")
-    if(DOF2_IsSet(file, "BrojTelefona"))
-    {
-        broj_telefona = DOF2_GetInt(file, "BrojTelefona");
-        format(broj_tel_str, sizeof(broj_tel_str), "%d", broj_telefona);
-    }
-    else
-    {
-        format(broj_tel_str, sizeof(broj_tel_str), "Nema");
-    }
-
-    potrebni_respekti = level * 4;
-
-    if(DOF2_GetInt(file, "Pol") == 0) format(pol, 16, "Musko"); else format(pol, 16, "Zensko");
-
-    if(DOF2_IsSet(file, "Drzava"))
-        format(drzava, 32, "%s", DOF2_GetString(file, "Drzava"));
-    else
-        format(drzava, 32, "Nepoznato");
-
-    // --- PROVJERA ORGANIZACIJE I RANKA ZA STATS ---
     new orgid = DOF2_GetInt(file, "Member");
-    new rank = DOF2_GetInt(file, "Rank");
-    new is_lider_stats = 0;
-    new org_ime_stats[32];
-
-    // Provjera da li je lider u Lideri.ini
-    new lideri_file_stats[64] = "BalkanRP/Lideri.ini";
-    if(DOF2_FileExists(lideri_file_stats))
+    new orgRank = DOF2_GetInt(file, "Rank");
+    new leader = 0;
+    new leadersFile[64] = "BalkanRP/Lideri.ini";
+    if(DOF2_FileExists(leadersFile))
     {
         for(new i = 1; i <= 20; i++)
         {
-            new key_l[32];
-            format(key_l, sizeof(key_l), "Lider_%d", i);
-            if(DOF2_IsSet(lideri_file_stats, key_l))
+            new key[24], leaderName[MAX_PLAYER_NAME];
+            format(key, sizeof(key), "Lider_%d", i);
+            if(!DOF2_IsSet(leadersFile, key)) continue;
+            format(leaderName, sizeof(leaderName), "%s", DOF2_GetString(leadersFile, key));
+            if(!strcmp(leaderName, name, true))
             {
-                new l_n[MAX_PLAYER_NAME];
-                format(l_n, sizeof(l_n), "%s", DOF2_GetString(lideri_file_stats, key_l));
-                if(strcmp(l_n, ime, true) == 0)
-                {
-                    orgid = i;
-                    is_lider_stats = 1;
-                    break;
-                }
+                orgid = i;
+                leader = 1;
+                break;
             }
         }
     }
 
-    // Definisanje imena organizacije
+    new orgName[40], rankName[24], jobName[32];
     switch(orgid)
     {
-        case 1: format(org_ime_stats, sizeof(org_ime_stats), "Policija");
-        case 2: format(org_ime_stats, sizeof(org_ime_stats), "Vojska");
-        case 3: format(org_ime_stats, sizeof(org_ime_stats), "Žandarmerija");
-        case 4: format(org_ime_stats, sizeof(org_ime_stats), "Taxi služba");
-        case 5: format(org_ime_stats, sizeof(org_ime_stats), "Hitna Pomoc");
-        case 6: format(org_ime_stats, sizeof(org_ime_stats), "Novinari");
-        case 7: format(org_ime_stats, sizeof(org_ime_stats), "Parking Servis");
-        case 8: format(org_ime_stats, sizeof(org_ime_stats), "Hitman");
-        case 9: format(org_ime_stats, sizeof(org_ime_stats), "La Cosa Nostra");
-        case 10: format(org_ime_stats, sizeof(org_ime_stats), "GHS");
-        case 11: format(org_ime_stats, sizeof(org_ime_stats), "Yamaguchi");
-        case 12: format(org_ime_stats, sizeof(org_ime_stats), "Ruska Mafija");
-        case 13: format(org_ime_stats, sizeof(org_ime_stats), "Groove Street Family");
-        case 14: format(org_ime_stats, sizeof(org_ime_stats), "Ballas Family");
-        case 15: format(org_ime_stats, sizeof(org_ime_stats), "MS-13");
-        case 16: format(org_ime_stats, sizeof(org_ime_stats), "Los Surenosa");
-        case 17: format(org_ime_stats, sizeof(org_ime_stats), "Privatna Organizacija 1");
-        case 18: format(org_ime_stats, sizeof(org_ime_stats), "Privatne Organizacija 2");
-        case 19: format(org_ime_stats, sizeof(org_ime_stats), "Bajkeri");
-        default: format(org_ime_stats, sizeof(org_ime_stats), "Nema");
+        case 1: format(orgName, sizeof(orgName), "Policija");
+        case 2: format(orgName, sizeof(orgName), "Vojska");
+        case 3: format(orgName, sizeof(orgName), "Zandarmerija");
+        case 4: format(orgName, sizeof(orgName), "Taxi Sluzba");
+        case 5: format(orgName, sizeof(orgName), "Hitna Pomoc");
+        case 6: format(orgName, sizeof(orgName), "Novinari");
+        case 7: format(orgName, sizeof(orgName), "Parking Servis");
+        case 8: format(orgName, sizeof(orgName), "Hitman");
+        case 9: format(orgName, sizeof(orgName), "La Cosa Nostra");
+        case 10: format(orgName, sizeof(orgName), "GHS");
+        case 11: format(orgName, sizeof(orgName), "Yamaguchi");
+        case 12: format(orgName, sizeof(orgName), "Ruska Mafija");
+        case 13: format(orgName, sizeof(orgName), "Grove Street Family");
+        case 14: format(orgName, sizeof(orgName), "Ballas Family");
+        case 15: format(orgName, sizeof(orgName), "MS-13");
+        case 16: format(orgName, sizeof(orgName), "Los Surenos");
+        case 17: format(orgName, sizeof(orgName), "Privatna Organizacija 1");
+        case 18: format(orgName, sizeof(orgName), "Privatna Organizacija 2");
+        case 19: format(orgName, sizeof(orgName), "Bajkeri");
+        default: format(orgName, sizeof(orgName), "Nema");
+    }
+    if(orgid == 0) format(rankName, sizeof(rankName), "Nema");
+    else if(leader) format(rankName, sizeof(rankName), "Lider");
+    else format(rankName, sizeof(rankName), "Rank %d", orgRank);
+
+    switch(DOF2_GetInt(file, "Posao"))
+    {
+        case 1: format(jobName, sizeof(jobName), "Cistac ulica");
+        case 2: format(jobName, sizeof(jobName), "Postar");
+        default: format(jobName, sizeof(jobName), "Nezaposlen");
     }
 
-    // Definisanje imena posla na osnovu ID-ja
-    new job_ime[32];
-    switch(player_job)
+    new sickUntil = DOF2_GetInt(file, "BolestanDo");
+    new healthStatus[40], spawnHealth;
+    if(sickUntil > gettime())
     {
-        case 0: format(job_ime, sizeof(job_ime), "Nezaposlen");
-        case 1: format(job_ime, sizeof(job_ime), "Cistac ulica");
-        case 2: format(job_ime, sizeof(job_ime), "Poštar");
-        default: format(job_ime, sizeof(job_ime), "Nepoznato");
-    }
-
-    new rank_str[64];
-    if(orgid == 0)
-    {
-        format(org_ime_stats, sizeof(org_ime_stats), "Nema");
-        format(rank_str, sizeof(rank_str), "Nema");
+        spawnHealth = 50;
+        format(healthStatus, sizeof(healthStatus), "Bolestan jos %d min", (sickUntil - gettime() + 59) / 60);
     }
     else
     {
-        if(orgid == 4)
-        {
-            if(is_lider_stats)
-            {
-                format(rank_str, sizeof(rank_str), "Šef Taxi Company-e");
-            }
-            else
-            {
-                switch(rank)
-                {
-                    case 1: format(rank_str, sizeof(rank_str), "Novi Radnik");
-                    case 2: format(rank_str, sizeof(rank_str), "Iskusni Radnik");
-                    case 3: format(rank_str, sizeof(rank_str), "Stariji Radnik");
-                    case 4: format(rank_str, sizeof(rank_str), "Penzioner");
-                    default: format(rank_str, sizeof(rank_str), "Rank %d", rank);
-                }
-            }
-        }
-        else
-        {
-            if(is_lider_stats)
-            {
-                format(rank_str, sizeof(rank_str), "Lider");
-            }
-            else
-            {
-                format(rank_str, sizeof(rank_str), "Rank %d", rank);
-            }
-        }
+        spawnHealth = 100;
+        format(healthStatus, sizeof(healthStatus), "Zdrav");
     }
 
-    // Slanje poruke tebi u chat
-    new chat_msg[128];
-    format(chat_msg, sizeof(chat_msg), "* %s gleda svoju licnu kartu (/stats).", ime);
-    SendClientMessage(playerid, 0xC2A2DAFF, chat_msg);
+    new punishmentStatus[40];
+    if(adminPunishments > 0) format(punishmentStatus, sizeof(punishmentStatus), "Kaznjavan %d puta", adminPunishments);
+    else format(punishmentStatus, sizeof(punishmentStatus), "Niste kaznjavani");
 
-    // Provjera igraca u blizini (za ostale oko tebe)
+    new donorText[24];
+    if(DOF2_GetInt(file, "DonatorRank") > 0)
+        format(donorText, sizeof(donorText), "Rank %d", DOF2_GetInt(file, "DonatorRank"));
+    else format(donorText, sizeof(donorText), "Nema");
+
+    new houseText[16], businessText[16];
+    new house = DOF2_GetInt(file, "Kuca");
+    new business = DOF2_GetInt(file, "Bizz");
+    if(house < 0) format(houseText, sizeof(houseText), "Nema"); else format(houseText, sizeof(houseText), "%d", house);
+    if(business < 0) format(businessText, sizeof(businessText), "Nema"); else format(businessText, sizeof(businessText), "%d", business);
+
+    new bingoText[8];
+    if(DOF2_GetInt(file, "Bingo") > 0) format(bingoText, sizeof(bingoText), "Da");
+    else format(bingoText, sizeof(bingoText), "Ne");
+
+    new text[7000], line[600];
+    format(line, sizeof(line), "{00BFFF}Ime: {FFFFFF}%s | ID: %d\n{00BFFF}Status: {FFFFFF}[%s]\n", name, playerid, punishmentStatus);
+    strcat(text, line, sizeof(text));
+    strcat(text, "{FFFFFF}----------- {FF3333}Osnovni Podaci {FFFFFF}-----------\n", sizeof(text));
+    format(line, sizeof(line), "{00BFFF}Level: {FFFFFF}[%d]\n{00BFFF}Respekti: {FFFFFF}[%d/%d]\n", level, respects, needed);
+    strcat(text, line, sizeof(text));
+    format(line, sizeof(line), "{00BFFF}Donatorski Rank: {FFFFFF}[%s] [Dani: %d | Sati: %d]\n{00BFFF}Bap Poeni: {FFFFFF}[%d]\n", donorText, DOF2_GetInt(file, "DonatorDani"), DOF2_GetInt(file, "DonatorSati"), DOF2_GetInt(file, "BapPoeni"));
+    strcat(text, line, sizeof(text));
+    format(line, sizeof(line), "{00BFFF}Mute: {FFFFFF}[%d min]\n{00BFFF}Telefon: {FFFFFF}[%s]\n{00BFFF}Broj Telefona: {FFFFFF}[%s]\n", muteMinutes, phone, phoneNumber);
+    strcat(text, line, sizeof(text));
+    format(line, sizeof(line), "{00BFFF}Spawn Helti: {FFFFFF}[%d%%] [%s]\n{00BFFF}Upozorenja: {FFFFFF}[%d/3]\n{00BFFF}Sati Igranja: {FFFFFF}[%d h %d min]\n", spawnHealth, healthStatus, warnings, hours, minutes);
+    strcat(text, line, sizeof(text));
+
+    strcat(text, "{FFFFFF}----------- {FF3333}Bankarski Racuni {FFFFFF}-----------\n", sizeof(text));
+    format(line, sizeof(line), "{00BFFF}Novcanik: {FFFFFF}[%d dinara]\n{00BFFF}Banka: {FFFFFF}[%d dinara]\n{00BFFF}Euro: {FFFFFF}[%d]\n", GetPlayerMoney(playerid), bank, euro);
+    strcat(text, line, sizeof(text));
+
+    strcat(text, "{FFFFFF}----------- {FF3333}Licna Karta {FFFFFF}-----------\n", sizeof(text));
+    format(line, sizeof(line), "{00BFFF}Registrovan: {FFFFFF}[%s]\n{00BFFF}Drzava: {FFFFFF}[%s]\n{00BFFF}Pol: {FFFFFF}[%s]\n{00BFFF}Godine: {FFFFFF}[%d]\n", registered, country, gender, DOF2_GetInt(file, "Godine"));
+    strcat(text, line, sizeof(text));
+    format(line, sizeof(line), "{00BFFF}U Braku: {FFFFFF}[%s]\n{00BFFF}Organizacija: {FFFFFF}[%s]\n{00BFFF}Rank: {FFFFFF}[%s]\n{00BFFF}Posao: {FFFFFF}[%s]\n", marriage, orgName, rankName, jobName);
+    strcat(text, line, sizeof(text));
+    format(line, sizeof(line), "{00BFFF}Osiguranja: {FFFFFF}[%d]\n{00BFFF}RolePlay Rank: {FFFFFF}[%d]\n", insurance, roleplayRank);
+    strcat(text, line, sizeof(text));
+
+    strcat(text, "{FFFFFF}----------- {FF3333}Dosije {FFFFFF}-----------\n", sizeof(text));
+    format(line, sizeof(line), "{00BFFF}Wanted: {FFFFFF}[%d]  {00BFFF}Ubistva: {FFFFFF}[%d]\n{00BFFF}Smrti: {FFFFFF}[%d]  {00BFFF}Zlocini: {FFFFFF}[%d]\n", WantedPoints[playerid], DOF2_GetInt(file, "DosijeUbistva"), DOF2_GetInt(file, "DosijeSmrti"), DOF2_GetInt(file, "DosijeZlocini"));
+    strcat(text, line, sizeof(text));
+    format(line, sizeof(line), "{00BFFF}Hapsen Puta: {FFFFFF}[%d]  {00BFFF}Tiketi: {FFFFFF}[%d]\n{00BFFF}Bezanje sa Servera: {FFFFFF}[%d]\n{00BFFF}Administrativne Kazne: {FFFFFF}[%d]\n", DOF2_GetInt(file, "DosijeUhapsen"), DOF2_GetInt(file, "DosijeTiketi"), DOF2_GetInt(file, "DosijeLTA"), adminPunishments);
+    strcat(text, line, sizeof(text));
+
+    strcat(text, "{FFFFFF}----------- {FF3333}Torba {FFFFFF}-----------\n", sizeof(text));
+    format(line, sizeof(line), "{00BFFF}Lotto Broj: {FFFFFF}[%d]  {00BFFF}Bingo: {FFFFFF}[%s]\n{00BFFF}Zlato: {FFFFFF}[%d kom]  {00BFFF}Telefonski Kredit: {FFFFFF}[%d]\n", DOF2_GetInt(file, "LottoBroj"), bingoText, gold, credits);
+    strcat(text, line, sizeof(text));
+    format(line, sizeof(line), "{00BFFF}Neobradjena Droga: {FFFFFF}[%d]  {00BFFF}Droga: {FFFFFF}[%d]\n{00BFFF}Vrecice Semena: {FFFFFF}[%d]  {00BFFF}Materijali: {FFFFFF}[%d]\n", DOF2_GetInt(file, "NeobradjenaDroga"), DOF2_GetInt(file, "Droga"), DOF2_GetInt(file, "VreciceSemena"), DOF2_GetInt(file, "Materijali"));
+    strcat(text, line, sizeof(text));
+    format(line, sizeof(line), "{00BFFF}Alat: {FFFFFF}[%d]  {00BFFF}Dinamit: {FFFFFF}[%d]\n", DOF2_GetInt(file, "Alat"), DOF2_GetInt(file, "Dinamit"));
+    strcat(text, line, sizeof(text));
+
+    strcat(text, "{FFFFFF}----------- {FF3333}Skillovi {FFFFFF}-----------\n", sizeof(text));
+    format(line, sizeof(line), "{00BFFF}News Reporter: {FFFFFF}[%d]\n{00BFFF}Donate Poeni: {FFFFFF}[%d]\n", DOF2_GetInt(file, "NewsReporterSkill"), donatePoints);
+    strcat(text, line, sizeof(text));
+    strcat(text, "{FFFFFF}----------- {FF3333}Kljucevi {FFFFFF}-----------\n", sizeof(text));
+    format(line, sizeof(line), "{00BFFF}Kuca: {FFFFFF}[%s] {00BFFF}Firma: {FFFFFF}[%s] {00BFFF}Veh1: {FFFFFF}[Nema] {00BFFF}Veh2: {FFFFFF}[Nema] {00BFFF}Veh3: {FFFFFF}[Nema]\n\n", houseText, businessText);
+    strcat(text, line, sizeof(text));
+    strcat(text, "{FF3333}Svaka zloupotreba Stats-a je strogo kaznjiva!", sizeof(text));
+
+    new chatMessage[96];
+    format(chatMessage, sizeof(chatMessage), "* %s gleda svoju licnu kartu (/stats).", name);
+    SendClientMessage(playerid, 0xC2A2DAFF, chatMessage);
     new Float:x, Float:y, Float:z;
     GetPlayerPos(playerid, x, y, z);
     for(new i = 0; i < MAX_PLAYERS; i++)
-    {
-        if(IsPlayerConnected(i) && i != playerid)
-        {
-            if(GetPlayerDistanceFromPoint(i, x, y, z) < 5.0)
-            {
-                SendClientMessage(i, 0xC2A2DAFF, chat_msg);
-            }
-        }
-    }
+        if(i != playerid && IsPlayerConnected(i) && GetPlayerDistanceFromPoint(i, x, y, z) < 5.0)
+            SendClientMessage(i, 0xC2A2DAFF, chatMessage);
 
-    // DIO 1: Zaglavlje i Osnovni podaci (Pocetak)
-    format(s1, sizeof(s1),
-        "{00BFFF}Ime: {FFFFFF}%s | (ID: %d)\n\
-        {00BFFF}Status: {FFFFFF}[Niste kaznjavani]\n\
-        {FFFFFF}----------- {FF0000}Osnovni Podaci {FFFFFF}-----------\n\
-        {00BFFF}Level: {FFFFFF}[%d]\n\
-        {00BFFF}Respekti: {FFFFFF}[%d/%d]\n",
-        ime, playerid, level, respekti, potrebni_respekti
-    );
-    format(string, sizeof(string), "%s", s1);
-
-    // DIO 2: Osnovni podaci (Sredina) - Dinamicki prikaz kupljenog telefona i broja
-    format(s2, sizeof(s2),
-        "{00BFFF}Donatorski Rank: {FFFFFF}[Nema] [Dani: 0 | Sati: 0]\n\
-        {00BFFF}Bap Poeni: {FFFFFF}[0]\n\
-        {00BFFF}Mute: {FFFFFF}[0 min]\n\
-        {00BFFF}Telefon: {FFFFFF}[%s]\n\
-        {00BFFF}Broj Telefona: {FFFFFF}[%s]\n",
-        telefon_str, broj_tel_str
-    );
-    strcat(string, s2, sizeof(string));
-
-    // DIO 3: Osnovni podaci (Kraj) i Banka (Sada sa dinamickom promenljivom banka)
-    format(s3, sizeof(s3),
-        "{00BFFF}Spawn Helti: {FFFFFF}[100.0] [Razboledi ste se]\n\
-        {00BFFF}Upozorenja: {FFFFFF}[0/3]\n\
-        {00BFFF}Sati Igranja: {FFFFFF}[%d]\n\
-        {FFFFFF}----------- {FF0000}Bankarski Racuni {FFFFFF}-----------\n\
-        {00BFFF}Novcanik: {FFFFFF}[%d dinara]\n\
-        {00BFFF}Banka: {FFFFFF}[%d dinara]\n\
-        {00BFFF}Euro: {FFFFFF}[%d]\n",
-        sati, novac, banka, euro
-    );
-    strcat(string, s3, sizeof(string));
-
-    // DIO 4: Licna Karta (Prvi dio)
-    format(s4, sizeof(s4),
-        "{FFFFFF}----------- {FF0000}Licna Karta {FFFFFF}-----------\n\
-        {00BFFF}Registrovan: {FFFFFF}15.06.2019 | 22:43:00\n\
-        {00BFFF}Drzava: {FFFFFF}[%s]\n\
-        {00BFFF}Pol: {FFFFFF}[%s]\n\
-        {00BFFF}Godine: {FFFFFF}[%d]\n\
-        {00BFFF}U Braku: {FFFFFF}[Ni sa kim]\n\
-        {00BFFF}Organizacija: {FFFFFF}[%s]\n",
-        drzava, pol, godine, org_ime_stats
-    );
-    strcat(string, s4, sizeof(string));
-
-    // DIO 5: Licna Karta (Drugi dio - sa dinamickim ispisom posla) i Dosije (Prvi dio)
-    format(s5, sizeof(s5),
-        "{00BFFF}Rank: {FFFFFF}[%s]\n\
-        {00BFFF}Posao: {FFFFFF}[%s]\n\
-        {00BFFF}Osiguranja: {FFFFFF}[23]\n\
-        {00BFFF}RolePlay Rank: {FFFFFF}[0]\n\
-        {FFFFFF}----------- {FF0000}Dosije {FFFFFF}-----------\n\
-        {00BFFF}Wanted: {FFFFFF}[%d]         {00BFFF}Ubistva: {FFFFFF}[67]\n\
-        {00BFFF}Smrti: {FFFFFF}[137]              {00BFFF}Zlocini: {FFFFFF}[59]\n",
-        rank_str, job_ime, WantedPoints[playerid]
-    );
-    strcat(string, s5, sizeof(string));
-
-    // DIO 6: Dosije (Drugi dio) i Torba (Prvi dio - Zlato jasno prikazano)
-    format(s6, sizeof(s6),
-        "{00BFFF}Hapsen Puta: {FFFFFF}[0]      {00BFFF}Tiketi: {FFFFFF}[0]\n\
-        {00BFFF}Bezanje sa Servera: {FFFFFF}[2]\n\
-        {00BFFF}Administrativne Kazne: {FFFFFF}[0]\n\
-        {FFFFFF}----------- {FF0000}Torba {FFFFFF}-----------\n\
-        {00BFFF}Lotto Broj: {FFFFFF}[0]                         {00BFFF}Bingo: {FFFFFF}[Ne]\n\
-        {00BFFF}Zlato: {FFFFFF}[%d kom]                        {00BFFF}Telefonski Kredit: {FFFFFF}[%d]\n",
-        zlato, IgracKrediti[playerid]
-    );
-    strcat(string, s6, sizeof(string));
-
-    // DIO 7: Torba (Nove stavke) i Skillovi
-    format(s7, sizeof(s7),
-        "{00BFFF}Neobradjena Droga: {FFFFFF}[0]  {00BFFF}Droga: {FFFFFF}[0]\n\
-        {00BFFF}Vrecice Semena: {FFFFFF}[49]          {00BFFF}Materijali: {FFFFFF}[0]\n\
-        {00BFFF}Alat: {FFFFFF}[0]                       {00BFFF}Dinamit: {FFFFFF}[%d]\n\
-        {FFFFFF}----------- {FF0000}Skillovi {FFFFFF}-----------\n\
-        {00BFFF}News Reporter: {FFFFFF}[1]\n\
-        {00BFFF}Donate Poeni: {FFFFFF}[885]\n",
-        DOF2_GetInt(file, "Dinamit")
-    );
-    strcat(string, s7, sizeof(string));
-
-    // DIO 7_1: Kljucevi (Dinamicki prikaz kuce i biznisa)
-    new kuca_str[32], bizz_str[32];
-
-    if(kuca < 0) format(kuca_str, sizeof(kuca_str), "Nema");
-    else format(kuca_str, sizeof(kuca_str), "%d", kuca);
-
-    if(bizz < 0) format(bizz_str, sizeof(bizz_str), "Nema");
-    else format(bizz_str, sizeof(bizz_str), "%d", bizz);
-
-    format(s7_1, sizeof(s7_1),
-        "{FFFFFF}----------- {FF0000}Kljucevi {FFFFFF}-----------\n\
-        {00BFFF}Kuca: {FFFFFF}[%s] {00BFFF}Firma: {FFFFFF}[%s] {00BFFF}Veh1: {FFFFFF}[880] {00BFFF}Veh2: {FFFFFF}[743] {00BFFF}Veh3: {FFFFFF}[-1]\n\n\
-        {FF0000}Svaka zloupotreba Stats-a je strogo kaznjiva !",
-        kuca_str, bizz_str
-    );
-    strcat(string, s7_1, sizeof(string));
-
-    ShowPlayerDialog(playerid, DIALOG_STATS, DIALOG_STYLE_MSGBOX, "{00BFFF}Status | Balkan Extreme", string, "Ok", "Zatvori");
+    ShowPlayerDialog(playerid, DIALOG_STATS, DIALOG_STYLE_MSGBOX, "{00BFFF}Status | Balkan Revolution", text, "Ok", "Zatvori");
     return 1;
 }
 stock IsValidRPName(const name[])
@@ -2819,12 +2826,31 @@ stock UpdateWantedHint(playerid)
     if(WantedPoints[playerid] <= 0)
     {
         PlayerTextDrawHide(playerid, TD_WantedHint[playerid]);
+        PlayerTextDrawHide(playerid, TD_WantedPolice[playerid]);
+        PlayerTextDrawHide(playerid, TD_WantedDosije[playerid]);
+        PlayerTextDrawHide(playerid, TD_WantedStars[playerid]);
+        WantedHintBlinkVisible[playerid] = false;
         return 1;
     }
-    new label[80];
-    format(label, sizeof(label), "IMATE %d WANTED LEVELA  /DOSIJE", WantedPoints[playerid]);
-    PlayerTextDrawSetString(playerid, TD_WantedHint[playerid], label);
+
+    new shownWanted = WantedPoints[playerid];
+    if(shownWanted > 6) shownWanted = 6;
+    new stars[20];
+    switch(shownWanted)
+    {
+        case 1: format(stars, sizeof(stars), "]");
+        case 2: format(stars, sizeof(stars), "]]");
+        case 3: format(stars, sizeof(stars), "]]]");
+        case 4: format(stars, sizeof(stars), "]]]]");
+        case 5: format(stars, sizeof(stars), "]]]]]");
+        default: format(stars, sizeof(stars), "]]]]]]");
+    }
+    PlayerTextDrawSetString(playerid, TD_WantedStars[playerid], stars);
     PlayerTextDrawShow(playerid, TD_WantedHint[playerid]);
+    PlayerTextDrawShow(playerid, TD_WantedPolice[playerid]);
+    PlayerTextDrawShow(playerid, TD_WantedDosije[playerid]);
+    PlayerTextDrawShow(playerid, TD_WantedStars[playerid]);
+    WantedHintBlinkVisible[playerid] = true;
     return 1;
 }
 
@@ -2868,6 +2894,7 @@ stock AddWantedPoints(playerid, amount, const reason[])
     {
         DOF2_SetInt(file, "DosijeWanted", WantedPoints[playerid]);
         DOF2_SetString(file, "DosijeRazlog", WantedReason[playerid]);
+        DOF2_SetInt(file, "DosijeZlocini", DOF2_GetInt(file, "DosijeZlocini") + 1);
         DOF2_SaveFile();
     }
     format(message, sizeof(message), "{FF7777}[DOSIJE] Dobili ste %d Wanted Levela. [Razlog] %s. Ukupno: %d. /dosije", amount, reason, WantedPoints[playerid]);
@@ -3319,6 +3346,59 @@ CMD:dajdinamit(playerid, params[])
     return 1;
 }
 
+CMD:pravila(playerid, params[])
+{
+    #pragma unused params
+    new text[6000];
+
+    strcat(text, "{75B9E6}Balkan Revolution je RolePlay server i kao takav moraju se postovati RolePlay pravila. Naravno, postoje\n", sizeof(text));
+    strcat(text, "mnoga RolePlay pravila, ali kod nas vaze samo ona koja su ovdje napisana. To znaci da mozete biti\n", sizeof(text));
+    strcat(text, "kaznjeni samo za pravila koja stoje u ovoj listi. Takodje postoje jos neka pravila koja se kaznjavaju, ali ne\n", sizeof(text));
+    strcat(text, "stoje na ovoj listi jer server sam obavlja taj posao. Za odredjena pravila na ovoj listi navedeno je za sta se\n", sizeof(text));
+    strcat(text, "tacno kaznjava. Sva RolePlay pravila mozete pogledati na nasem forumu. Pravila su obavezna za testiranje\n", sizeof(text));
+    strcat(text, "u Administraciju, a koriste ih i drzavne organizacije.\n\n", sizeof(text));
+
+    strcat(text, "{FF3333}DeathMatching (DM) - Ubijanje ljudi bez ikakvog RP razloga. {75B9E6}Kaznjava se: Ubistvo civila, ubistvo clana\n", sizeof(text));
+    strcat(text, "drzavne organizacije osim Policije/Zandarmerije i ubistvo radnika dok radi legalan posao. Igrac koga\n", sizeof(text));
+    strcat(text, "prijavite ce biti kaznjen samo ukoliko ga vi ne napadnete! {66CC66}Kazna: 30 min\n", sizeof(text));
+    strcat(text, "{FF3333}BugAbuse (BA) - Iskoristavanje poznatih i nepoznatih BUGova na skripti. {66CC66}Kazna: Prison 1h\n", sizeof(text));
+    strcat(text, "{FF3333}Powergaming (PG) - Radnja koju je nemoguce izvesti u stvarnom zivotu. {75B9E6}Kaznjava se: Ako udjete\n", sizeof(text));
+    strcat(text, "na G preko zida, ukoliko vas Policajac /cuff ili /pu preko zida ili u vazduhu bez koriscenja /me i /do\n", sizeof(text));
+    strcat(text, "komandi. {66CC66}Kazna: 30 min\n", sizeof(text));
+    strcat(text, "{FF3333}SpawnKill (SK) - Ubijanje igraca na mjestu spawn-a. {66CC66}Kazna: 30 min\n", sizeof(text));
+    strcat(text, "{FF3333}Non RolePlay (NonRP) - Ometanje RP radnji koje izvrsavaju drugi igraci. {66CC66}Kazna: 30 min\n", sizeof(text));
+    strcat(text, "{FF3333}Logging To Avoid (LTA) - Napustanje igrice da biste nesto izbjegli. {66CC66}Kazna: Prison 1 - 5h\n", sizeof(text));
+    strcat(text, "{FF3333}Player vs Player (PvP) - Odnos izmedju igraca na serveru. {75B9E6}Kaznjava se: Izivljavanje nad drugim\n", sizeof(text));
+    strcat(text, "igracima, tjeranje sa servera, ponizavanje i slicno. {66CC66}Kazna: 30 min\n", sizeof(text));
+    strcat(text, "{FF3333}Player vs Environment (PvE) - Odnos igraca sa svojom okolinom. {75B9E6}Kaznjava se: Konstantno udaranje\n", sizeof(text));
+    strcat(text, "vozilom (Dune, Autobus, Sleper, Kamion). {66CC66}Kazna: 30 min\n", sizeof(text));
+    strcat(text, "{FF3333}Drive By (DB) - Odnosi se na stetu nanesenu drugom igracu iz vozila. {75B9E6}Kaznjava se: Zabranjeno je\n", sizeof(text));
+    strcat(text, "parkirati se na druge igrace i cekati njihovu smrt, te ubijanje elisom helikoptera. {66CC66}Kazna: 30 min\n", sizeof(text));
+    strcat(text, "{FF3333}Fake Account (FA) - Pravljenje novih naloga radi ostvarivanja prednosti, a vec posjedujete nalog\n", sizeof(text));
+    strcat(text, "{75B9E6}(ukoliko vam je potreban novi nalog, obavezno se obratite na FB stranicu). {66CC66}Kazna: Cenzura\n", sizeof(text));
+    strcat(text, "{FF3333}VIP Abusing (VA) - Zloupotreba komandi VIP-a. {75B9E6}Kaznjava se: Spasavanje igraca sa Wanted Levelom\n", sizeof(text));
+    strcat(text, "tako sto ga negdje portate. {66CC66}Kazna: 30 min\n", sizeof(text));
+    strcat(text, "{FF3333}Forum/Zalba. {66CC66}Kazna: Po pravilniku\n", sizeof(text));
+    strcat(text, "{FF3333}Stablo - Omalovazavanje administracije i nepostovanje stabla > /stablo. {66CC66}Kazna: Prison 1 - 5h\n", sizeof(text));
+    strcat(text, "{FF3333}Nacionalizam. {66CC66}Kazna: Ludnica 5 - 50h\n", sizeof(text));
+    strcat(text, "{FF3333}Vrijedjanje. {66CC66}Kazna: Ludnica 1 - 24h + mute 1 - 24h\n", sizeof(text));
+    strcat(text, "{FF3333}Spam - Ponavljanje istih recenica ili rijeci vise puta zaredom, na bilo kom chatu. Vazi i za OOC\n", sizeof(text));
+    strcat(text, "chatove. {66CC66}Kazna: Slap, Kick ili Lavirint\n", sizeof(text));
+    strcat(text, "{FF3333}Invalid AD - Pisanje gluposti na oglasima i stvari koje krse pravilo > /mg.\n", sizeof(text));
+    strcat(text, "{66CC66}Kazna: 30 - 60 min + mute 1 - 3h\n", sizeof(text));
+    strcat(text, "{FF3333}Cit - Koriscenje bilo kakvih citova/modova koji daju prednost u odnosu na ostale igrace.\n", sizeof(text));
+    strcat(text, "{66CC66}Kazna: Robija, a ukoliko igrac i dalje koristi cit slijedi cenzura\n", sizeof(text));
+    strcat(text, "{FF3333}Reklamiranje bilo kakvih zajednica, sajtova... {66CC66}Kazna: Robija\n", sizeof(text));
+    strcat(text, "{FF3333}Zabranjeno zapocinjanje price o nekom drugom serveru. {66CC66}Kazna: Rengban\n", sizeof(text));
+    strcat(text, "{FF3333}Zabranjene su imovinske prevare, provale na tudje naloge i slicno. {75B9E6}Kod kupovine/prodaje\n", sizeof(text));
+    strcat(text, "obavezno zovite helpera; ako nema helpera, a dodje do prevare, obavezno slikajte FB.\n", sizeof(text));
+    strcat(text, "{66CC66}Kazna: Resava vrhovna komanda\n", sizeof(text));
+    strcat(text, "{FF3333}Invalid /askq - Glupiranje na /askq i postavljanje glupih pitanja. {66CC66}Kazna: Lavirint\n", sizeof(text));
+    strcat(text, "{FF3333}Voznja bicikla sa WL-om i ulaz u kucu sa healthom i armorom tokom akcije. {66CC66}Kazna: 30 min", sizeof(text));
+
+    ShowPlayerDialog(playerid, DIALOG_PRAVILA, DIALOG_STYLE_MSGBOX, "Pravila", text, "Ok", "");
+    return 1;
+}
 CMD:help(playerid, params[])
 {
     new string[1500];
@@ -3345,70 +3425,122 @@ CMD:help(playerid, params[])
     return 1;
 }
 // Pozovi ovu funkciju kad god igrac dobije PayDay (platu na sat vremena)
+stock GetPlayerAccountPath(playerid, file[], size)
+{
+    new name[MAX_PLAYER_NAME];
+    GetPlayerName(playerid, name, sizeof(name));
+    format(file, size, "Korisnici/%s.ini", name);
+    return DOF2_FileExists(file);
+}
+
+stock AddPlayerSavedStat(playerid, key[], amount)
+{
+    new file[128];
+    if(!GetPlayerAccountPath(playerid, file, sizeof(file))) return 0;
+    DOF2_SetInt(file, key, DOF2_GetInt(file, key) + amount);
+    DOF2_SaveFile();
+    return 1;
+}
+
+stock LoadExtendedPlayerStats(playerid)
+{
+    new file[128];
+    if(!GetPlayerAccountPath(playerid, file, sizeof(file))) return 0;
+    PlayerMinute[playerid] = DOF2_GetInt(file, "MinuteIgranja");
+    if(PlayerMinute[playerid] < 0 || PlayerMinute[playerid] > 59) PlayerMinute[playerid] = 0;
+    PlayerRespekti[playerid] = DOF2_GetInt(file, "Respekti");
+    PlayerInfo[playerid][pBrojTelefona] = DOF2_GetInt(file, "BrojTelefona");
+    IgracKrediti[playerid] = DOF2_GetInt(file, "Krediti");
+    PlayerInfo[playerid][pLevel] = DOF2_GetInt(file, "Level");
+    PlayerInfo[playerid][pSati] = DOF2_GetInt(file, "Sati");
+    PlayerInfo[playerid][pRespekti] = PlayerRespekti[playerid];
+    if(!DOF2_IsSet(file, "Kuca")) DOF2_SetInt(file, "Kuca", -1);
+    if(!DOF2_IsSet(file, "Bizz")) DOF2_SetInt(file, "Bizz", -1);
+    if(!DOF2_IsSet(file, "Vozilo1")) DOF2_SetInt(file, "Vozilo1", -1);
+    if(!DOF2_IsSet(file, "Vozilo2")) DOF2_SetInt(file, "Vozilo2", -1);
+    if(!DOF2_IsSet(file, "VoziloDonator")) DOF2_SetInt(file, "VoziloDonator", -1);
+    if(!DOF2_IsSet(file, "Registrovan")) DOF2_SetString(file, "Registrovan", "Prije novog Stats sistema");
+    DOF2_SaveFile();
+    return 1;
+}
+
+forward ApplySpawnHealth(playerid);
+public ApplySpawnHealth(playerid)
+{
+    if(!IsPlayerConnected(playerid) || !GetPVarInt(playerid, "BR_LoggedIn")) return 1;
+    new file[128];
+    if(!GetPlayerAccountPath(playerid, file, sizeof(file))) return 1;
+    new sickUntil = DOF2_GetInt(file, "BolestanDo");
+    if(sickUntil > gettime()) SetPlayerHealth(playerid, 50.0);
+    else
+    {
+        if(sickUntil != 0)
+        {
+            DOF2_SetInt(file, "BolestanDo", 0);
+            DOF2_SaveFile();
+        }
+        SetPlayerHealth(playerid, 100.0);
+    }
+    return 1;
+}
+
 stock DajPayDayRespekt(playerid)
 {
-    new ime[MAX_PLAYER_NAME], file[128];
-    GetPlayerName(playerid, ime, sizeof(ime));
-    format(file, sizeof(file), "Korisnici/%s.ini", ime);
+    if(!IsPlayerConnected(playerid) || !GetPVarInt(playerid, "BR_LoggedIn")) return 0;
+    new file[128];
+    if(!GetPlayerAccountPath(playerid, file, sizeof(file))) return 0;
 
-    if(!DOF2_FileExists(file)) return 0;
-
-    // 1. Povecavamo respekt za 1 (Ovo je jedino mjesto gdje se dodaje respekt!)
-    PlayerRespekti[playerid]++;
-
-    // 2. Citamo podatke iz fajla (Level, Sati, Admin, Helper)
     new level = DOF2_GetInt(file, "Level");
-    new sati = DOF2_GetInt(file, "Sati"); // Pretpostavljam da cuvaš sate pod ovim nazivom, prilagodi ako je drugacije
+    new sati = DOF2_GetInt(file, "Sati") + 1;
     new admin_lvl = DOF2_GetInt(file, "Admin");
     new helper_lvl = DOF2_GetInt(file, "Helper");
+    if(level < 1) level = 1;
 
-    // Povecavamo sate igracu za 1
+    PlayerRespekti[playerid] = DOF2_GetInt(file, "Respekti") + HappyHourMultiplier;
     sati++;
+    sati--;
     DOF2_SetInt(file, "Sati", sati);
 
-    // 3. LOGIKA ZA NOVAC (PLATU)
-    if(admin_lvl > 0 || helper_lvl > 0)
+    new salary = 0;
+    if(admin_lvl > 0 || helper_lvl > 0) salary = 1500;
+    else if(sati % 2 == 0) salary = 2500;
+    if(salary > 0)
     {
-        // Admini i helperi dobijaju 1500$ svaki sat
-        GivePlayerMoney(playerid, 1500);
-        SendClientMessage(playerid, 0x00FF00FF, "[PAYDAY]: Dobili ste platu od 1500$ (Staff) i 1 respekt!");
-    }
-    else
-    {
-        // Obicni igraci dobijaju 2500$ tek nakon 2 sata igranja (2., 4., 6. sat...)
-        if(sati % 2 == 0)
-        {
-            GivePlayerMoney(playerid, 2500);
-            SendClientMessage(playerid, 0x00FF00FF, "[PAYDAY]: Dobili ste platu od 2500$ (Nakon 2h igranja) i 1 respekt!");
-        }
-        else
-        {
-            SendClientMessage(playerid, 0x00FF00FF, "[PAYDAY]: Dobili ste 1 respekt. (Novac od 2500$ dobijate nakon 2 sata igranja).");
-        }
+        GivePlayerMoney(playerid, salary);
+        PlayerInfo[playerid][pNovac] = GetPlayerMoney(playerid);
+        DOF2_SetInt(file, "Novac", PlayerInfo[playerid][pNovac]);
     }
 
-    // 4. Provjera za level up
-    new potrebni_respekti = level * 4;
-
-    if(PlayerRespekti[playerid] >= potrebni_respekti)
+    new oldLevel = level;
+    new needed = level * 4;
+    while(PlayerRespekti[playerid] >= needed)
     {
+        PlayerRespekti[playerid] -= needed;
         level++;
-        PlayerRespekti[playerid] = 0;
-
-        DOF2_SetInt(file, "Level", level);
-        DOF2_SetInt(file, "Respekti", 0);
-        DOF2_SaveFile();
-
-        SetPlayerScore(playerid, level);
-
-        new string[128];
-        format(string, sizeof(string), "[SERVER]: Cestitamo! Uspjesno ste presli na level %d!", level);
-        SendClientMessage(playerid, 0xFFFF00FF, string);
+        needed = level * 4;
     }
-    else
+    DOF2_SetInt(file, "Level", level);
+    DOF2_SetInt(file, "Respekti", PlayerRespekti[playerid]);
+    PlayerInfo[playerid][pLevel] = level;
+    PlayerInfo[playerid][pSati] = sati;
+    PlayerInfo[playerid][pRespekti] = PlayerRespekti[playerid];
+    SetPlayerScore(playerid, level);
+
+    new sickUntil = DOF2_GetInt(file, "BolestanDo");
+    if(sickUntil <= gettime() && random(100) < 10)
     {
-        DOF2_SetInt(file, "Respekti", PlayerRespekti[playerid]);
-        DOF2_SaveFile();
+        DOF2_SetInt(file, "BolestanDo", gettime() + 7200);
+        SendClientMessage(playerid, 0xFFAA66FF, "[ZDRAVLJE]: Razboljeli ste se. Spawn health ce biti 50% naredna 2 sata.");
+    }
+    DOF2_SaveFile();
+
+    new message[160];
+    format(message, sizeof(message), "[PAYDAY]: Odigrali ste puni sat, dobili %dx respekt i %d RSD. Respekti: %d/%d.", HappyHourMultiplier, salary, PlayerRespekti[playerid], level * 4);
+    SendClientMessage(playerid, 0x00FF00FF, message);
+    if(level > oldLevel)
+    {
+        format(message, sizeof(message), "[SERVER]: Cestitamo! Presli ste sa levela %d na level %d.", oldLevel, level);
+        SendClientMessage(playerid, 0xFFFF00FF, message);
     }
     return 1;
 }
@@ -4215,7 +4347,7 @@ public UpdateAdminLabel(playerid)
             // Dodate uglaste zagrade oko svakog ispisa
             switch(admin_lvl)
             {
-                case RANK_ADMIN_1: format(string, sizeof(string), "{000000}[Admin Level: 1]");
+                case RANK_ADMIN_1: format(string, sizeof(string), "{00BFFF}[Junior Admin]");
                 case RANK_ADMIN_3: format(string, sizeof(string), "{000000}[Admin Level: 3]");
                 case RANK_ADMIN_5: format(string, sizeof(string), "{000000}[Admin Level: 5]");
                 case RANK_HEAD_ADMIN: format(string, sizeof(string), "{000000}[Head Admin]");
@@ -4239,26 +4371,21 @@ public TajmerZaMinute()
 {
     for(new i = 0; i < MAX_PLAYERS; i++)
     {
-        if(IsPlayerConnected(i))
+        if(!IsPlayerConnected(i) || !GetPVarInt(i, "BR_LoggedIn")) continue;
+        new file[128];
+        if(!GetPlayerAccountPath(i, file, sizeof(file))) continue;
+        PlayerMinute[i]++;
+        if(PlayerMinute[i] >= 60)
         {
-            new file[128], ime[MAX_PLAYER_NAME];
-            GetPlayerName(i, ime, sizeof(ime));
-            format(file, sizeof(file), "Korisnici/%s.ini", ime);
-
-            if(DOF2_FileExists(file))
-            {
-                // Povecavamo minute
-                PlayerMinute[i]++;
-
-                // Kada prode 60 minuta (pun sat)
-                if(PlayerMinute[i] >= 60)
-                {
-                    PlayerMinute[i] = 0; // Resetujemo minute na 0
-
-                    // Pozivamo funkciju za platu i respekt (Ona sada sve rješava: i admin/helper 1500$, i obicne 2500$ na 2 sata, i respekt!)
-                    DajPayDayRespekt(i);
-                }
-            }
+            PlayerMinute[i] = 0;
+            DOF2_SetInt(file, "MinuteIgranja", 0);
+            DOF2_SaveFile();
+            DajPayDayRespekt(i);
+        }
+        else
+        {
+            DOF2_SetInt(file, "MinuteIgranja", PlayerMinute[i]);
+            DOF2_SaveFile();
         }
     }
     return 1;
@@ -4684,6 +4811,16 @@ CMD:buyhouse(playerid, params[])
 }
 public OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
 {
+    // Admin vehicle jump: H podize vozilo i cuva trenutni pravac/brzinu.
+    if((newkeys & KEY_CROUCH) && !(oldkeys & KEY_CROUCH) &&
+        GetPlayerState(playerid) == PLAYER_STATE_DRIVER && HasAdminCommandAccess(playerid))
+    {
+        new vehicleid = GetPlayerVehicleID(playerid);
+        new Float:vx, Float:vy, Float:vz;
+        GetVehicleVelocity(vehicleid, vx, vy, vz);
+        SetVehicleVelocity(vehicleid, vx, vy, vz + 0.35);
+        return 1;
+    }
     if((newkeys & KEY_SECONDARY_ATTACK) && !(oldkeys & KEY_SECONDARY_ATTACK) &&
         (ScriptJetpack[playerid] || GetPlayerSpecialAction(playerid) == SPECIAL_ACTION_USEJETPACK))
     {
@@ -4815,19 +4952,13 @@ public OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
         {
             if(IsPlayerInRangeOfPoint(playerid, 2.5, 1462.90759277, -1022.80725097, 23.83310317))
             {
-                SetPlayerInterior(playerid, 0);
-                SetPlayerVirtualWorld(playerid, 0);
-                SetPlayerPos(playerid, 153.79109191, 1702.71630859, -0.85856175);
-                SetCameraBehindPlayer(playerid);
+                SafeTeleportPlayer(playerid, 153.79109191, 1702.71630859, -0.85856175, 0, 0);
                 SendClientMessage(playerid, 0x33CCFFFF, "[BANKA]: Usli ste u banku.");
                 return 1;
             }
             if(IsPlayerInRangeOfPoint(playerid, 2.5, 153.79109191, 1702.71630859, -0.85856175))
             {
-                SetPlayerInterior(playerid, 0);
-                SetPlayerVirtualWorld(playerid, 0);
-                SetPlayerPos(playerid, 1462.90759277, -1022.80725097, 23.83310317);
-                SetCameraBehindPlayer(playerid);
+                SafeTeleportPlayer(playerid, 1462.90759277, -1022.80725097, 23.83310317, 0, 0);
                 SendClientMessage(playerid, 0x33CCFFFF, "[BANKA]: Izasli ste iz banke.");
                 return 1;
             }
@@ -4838,9 +4969,7 @@ public OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
         {
             if(pVW == h && IsPlayerInRangeOfPoint(playerid, 3.0, HouseInfo[h][kExitX], HouseInfo[h][kExitY], HouseInfo[h][kExitZ]))
             {
-                SetPlayerInterior(playerid, 0);
-                SetPlayerVirtualWorld(playerid, 0);
-                SetPlayerPos(playerid, HouseInfo[h][kEntranceX], HouseInfo[h][kEntranceY], HouseInfo[h][kEntranceZ]);
+                SafeTeleportPlayer(playerid, HouseInfo[h][kEntranceX], HouseInfo[h][kEntranceY], HouseInfo[h][kEntranceZ], 0, 0);
                 return 1;
             }
         }
@@ -4860,9 +4989,7 @@ public OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
                     return 1;
                 }
 
-                SetPlayerInterior(playerid, HouseInfo[h][kInterior]);
-                SetPlayerVirtualWorld(playerid, h);
-                SetPlayerPos(playerid, HouseInfo[h][kExitX], HouseInfo[h][kExitY], HouseInfo[h][kExitZ]);
+                SafeTeleportPlayer(playerid, HouseInfo[h][kExitX], HouseInfo[h][kExitY], HouseInfo[h][kExitZ], HouseInfo[h][kInterior], h);
                 return 1;
             }
         }
@@ -4872,9 +4999,7 @@ public OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
         {
             if(pVW == (m + 5000) && IsPlayerInRangeOfPoint(playerid, 3.0, MarketInfo[m][mExitX], MarketInfo[m][mExitY], MarketInfo[m][mExitZ]))
             {
-                SetPlayerInterior(playerid, 0);
-                SetPlayerVirtualWorld(playerid, 0);
-                SetPlayerPos(playerid, MarketInfo[m][mEntranceX], MarketInfo[m][mEntranceY], MarketInfo[m][mEntranceZ]);
+                SafeTeleportPlayer(playerid, MarketInfo[m][mEntranceX], MarketInfo[m][mEntranceY], MarketInfo[m][mEntranceZ], 0, 0);
                 return 1;
             }
         }
@@ -4884,9 +5009,7 @@ public OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
         {
             if(pVW == 0 && IsPlayerInRangeOfPoint(playerid, 3.0, MarketInfo[m][mEntranceX], MarketInfo[m][mEntranceY], MarketInfo[m][mEntranceZ]))
             {
-                SetPlayerInterior(playerid, MarketInfo[m][mInterior]);
-                SetPlayerVirtualWorld(playerid, m + 5000);
-                SetPlayerPos(playerid, MarketInfo[m][mExitX], MarketInfo[m][mExitY], MarketInfo[m][mExitZ]);
+                SafeTeleportPlayer(playerid, MarketInfo[m][mExitX], MarketInfo[m][mExitY], MarketInfo[m][mExitZ], MarketInfo[m][mInterior], m + 5000);
                 return 1;
             }
         }
@@ -4896,9 +5019,7 @@ public OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
         {
             if(pVW == (z + 6000) && IsPlayerInRangeOfPoint(playerid, 3.0, ZlataInfo[z][zExitX], ZlataInfo[z][zExitY], ZlataInfo[z][zExitZ]))
             {
-                SetPlayerInterior(playerid, 0);
-                SetPlayerVirtualWorld(playerid, 0);
-                SetPlayerPos(playerid, ZlataInfo[z][zEntranceX], ZlataInfo[z][zEntranceY], ZlataInfo[z][zEntranceZ]);
+                SafeTeleportPlayer(playerid, ZlataInfo[z][zEntranceX], ZlataInfo[z][zEntranceY], ZlataInfo[z][zEntranceZ], 0, 0);
                 return 1;
             }
         }
@@ -4908,9 +5029,7 @@ public OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
         {
             if(pVW == 0 && IsPlayerInRangeOfPoint(playerid, 3.0, ZlataInfo[z][zEntranceX], ZlataInfo[z][zEntranceY], ZlataInfo[z][zEntranceZ]))
             {
-                SetPlayerInterior(playerid, ZlataInfo[z][zInterior]);
-                SetPlayerVirtualWorld(playerid, z + 6000);
-                SetPlayerPos(playerid, ZlataInfo[z][zExitX], ZlataInfo[z][zExitY], ZlataInfo[z][zExitZ]);
+                SafeTeleportPlayer(playerid, ZlataInfo[z][zExitX], ZlataInfo[z][zExitY], ZlataInfo[z][zExitZ], ZlataInfo[z][zInterior], z + 6000);
                 return 1;
             }
         }
@@ -4918,15 +5037,13 @@ public OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
         // 7. GIGATRON - ULAZ I IZLAZ
         if(pInt == 0 && IsPlayerInRangeOfPoint(playerid, 3.0, 1412.1534, -1700.0010, 13.5395))
         {
-            SetPlayerPos(playerid, -540.8716, 2596.0989, 10.9875);
-            SetPlayerInterior(playerid, 10);
+            SafeTeleportPlayer(playerid, -540.8716, 2596.0989, 10.9875, 10, 0);
             SendClientMessage(playerid, 0x00BFFFFF, "[Balkan Revolution]: Ušli ste u Gigatron!");
             return 1;
         }
         else if(pInt == 10 && IsPlayerInRangeOfPoint(playerid, 3.0, -540.8716, 2596.0989, 10.9875))
         {
-            SetPlayerPos(playerid, 1412.1534, -1700.0010, 13.5395);
-            SetPlayerInterior(playerid, 0);
+            SafeTeleportPlayer(playerid, 1412.1534, -1700.0010, 13.5395, 0, 0);
             SendClientMessage(playerid, 0x00BFFFFF, "[Balkan Revolution]: Izišli ste iz Gigatrona!");
             return 1;
         }
@@ -4934,19 +5051,13 @@ public OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
         // 8. OPŠTINA - ULAZ I IZLAZ
         if(pInt == 0 && IsPlayerInRangeOfPoint(playerid, 3.0, 1481.0885, -1771.9858, 18.7958))
         {
-            SetPlayerPos(playerid, 386.52, 173.63, 1008.38);
-            SetPlayerInterior(playerid, 3);
-            SetPlayerFacingAngle(playerid, 90.0);
-            SetCameraBehindPlayer(playerid);
+            SafeTeleportPlayer(playerid, 386.52, 173.63, 1008.38, 3, 0, 90.0);
             SendClientMessage(playerid, 0x00FF00FF, "[OPŠTINA]: Ušli ste u Gradsku Opštinu.");
             return 1;
         }
         else if(pInt == 3 && IsPlayerInRangeOfPoint(playerid, 3.0, 386.52, 173.63, 1008.38))
         {
-            SetPlayerPos(playerid, 1481.0885, -1771.9858, 18.7958);
-            SetPlayerInterior(playerid, 0);
-            SetPlayerFacingAngle(playerid, 177.9518);
-            SetCameraBehindPlayer(playerid);
+            SafeTeleportPlayer(playerid, 1481.0885, -1771.9858, 18.7958, 0, 0, 177.9518);
             SendClientMessage(playerid, 0x00FF00FF, "[OPŠTINA]: Izašli ste iz Gradske Opštine.");
             return 1;
         }
@@ -4954,21 +5065,13 @@ public OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
         // 9. POLICIJSKA STANICA (Beogradska Policija) - ULAZ I IZLAZ
         if(pInt == 0 && IsPlayerInRangeOfPoint(playerid, 3.0, 1555.1368, -1675.6598, 16.1953))
         {
-            SetPlayerPos(playerid, 246.66, 65.80, 1003.64);
-            SetPlayerInterior(playerid, 6);
-            SetPlayerVirtualWorld(playerid, 0);
-            SetPlayerFacingAngle(playerid, 0.0);
-            SetCameraBehindPlayer(playerid);
+            SafeTeleportPlayer(playerid, 246.66, 65.80, 1003.64, 6, 0, 0.0);
             SendClientMessage(playerid, 0x33CCFFFF, "[Balkan Revolution]: Ušli ste u stanicu policije.");
             return 1;
         }
         else if(pInt == 6 && IsPlayerInRangeOfPoint(playerid, 3.0, 246.66, 65.80, 1003.64))
         {
-            SetPlayerPos(playerid, 1555.1368, -1675.6598, 16.1953);
-            SetPlayerInterior(playerid, 0);
-            SetPlayerVirtualWorld(playerid, 0);
-            SetPlayerFacingAngle(playerid, 272.5560);
-            SetCameraBehindPlayer(playerid);
+            SafeTeleportPlayer(playerid, 1555.1368, -1675.6598, 16.1953, 0, 0, 272.5560);
             SendClientMessage(playerid, 0x33CCFFFF, "[Balkan Revolution]: Izašli ste iz stanice policije.");
             return 1;
         }
@@ -4976,17 +5079,13 @@ public OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
         // 10. BOLNICA - ULAZ I IZLAZ
         if(pInt == 0 && IsPlayerInRangeOfPoint(playerid, 3.0, 1172.4083, -1323.3091, 15.4029))
         {
-            SetPlayerPos(playerid, -23.7858, 1500.6514, -3.3132);
-            SetPlayerInterior(playerid, 0);
-            SetPlayerVirtualWorld(playerid, 0);
+            SafeTeleportPlayer(playerid, -23.7858, 1500.6514, -3.3132, 0, 0);
             SendClientMessage(playerid, 0x00FF00FF, "[BOLNICA]: Ušli ste u bolnicu.");
             return 1;
         }
         else if(pInt == 0 && IsPlayerInRangeOfPoint(playerid, 3.0, -23.7858, 1500.6514, -3.3132))
         {
-            SetPlayerPos(playerid, 1172.4083, -1323.3091, 15.4029);
-            SetPlayerInterior(playerid, 0);
-            SetPlayerVirtualWorld(playerid, 0);
+            SafeTeleportPlayer(playerid, 1172.4083, -1323.3091, 15.4029, 0, 0);
             SendClientMessage(playerid, 0xFF0000FF, "[BOLNICA]: Izašli ste iz bolnice.");
             return 1;
         }
@@ -5614,6 +5713,7 @@ CMD:kick(playerid, params[])
     // PosaljiAdminimaIliVlasniku(adminporuka);
 
     // Pokrece timer koji ce nakon 500ms zaista izbaciti igraca
+    AddPlayerSavedStat(targetid, "AdminKazne", 1);
     SetTimerEx("IzvrsiKick", 500, false, "i", targetid);
     return 1;
 }
@@ -5653,6 +5753,7 @@ CMD:ban(playerid, params[])
     // PosaljiAdminimaIliVlasniku(adminporuka);
 
     // Ovdje ide funkcija/komanda za banovanje (npr. Ban(targetid) ili snimanje u fajl)
+    AddPlayerSavedStat(targetid, "AdminKazne", 1);
     SetTimerEx("IzvrsiBan", 500, false, "i", targetid);
     return 1;
 }
@@ -6014,11 +6115,6 @@ CMD:inventory(playerid, params[])
         PlayerInfo[playerid][pSok]
     );
 
-    new account[128], playerName[MAX_PLAYER_NAME], extra[48];
-    GetPlayerName(playerid, playerName, sizeof(playerName));
-    format(account, sizeof(account), "Korisnici/%s.ini", playerName);
-    format(extra, sizeof(extra), "\nDinamit: %d kom", DOF2_FileExists(account) ? DOF2_GetInt(account, "Dinamit") : 0);
-    strcat(string, extra, sizeof(string));
     ShowPlayerDialog(playerid, DIALOG_INVENTORY, DIALOG_STYLE_MSGBOX, "Balkan Revolution RP - Inventory", string, "U redu", "");
     return 1;
 }
@@ -6105,8 +6201,43 @@ stock PostaviMarketLabele()
 
     print("Market labeli su postavljeni."); // Ovo ceš vidjeti u server_log.txt ako se ucitalo
 }
+CMD:sms(playerid, params[])
+{
+    new targetid, messageText[100];
+    if(sscanf(params, "us[100]", targetid, messageText))
+        return SendClientMessage(playerid, -1, "Koristenje: /sms [ID/Ime] [Poruka]");
+    if(!IsPlayerConnected(targetid) || targetid == playerid)
+        return SendClientMessage(playerid, 0xFF7777FF, "[SMS]: Izaberite drugog online igraca.");
+    new senderFile[128], targetFile[128];
+    if(!GetPlayerAccountPath(playerid, senderFile, sizeof(senderFile)) || !GetPlayerAccountPath(targetid, targetFile, sizeof(targetFile)))
+        return SendClientMessage(playerid, 0xFF7777FF, "[SMS]: Korisnicki nalog nije pronadjen.");
+    if(!DOF2_IsSet(senderFile, "Telefon") || DOF2_GetInt(senderFile, "BrojTelefona") <= 0)
+        return SendClientMessage(playerid, 0xFF7777FF, "[SMS]: Morate kupiti telefon i broj telefona.");
+    if(!DOF2_IsSet(targetFile, "Telefon") || DOF2_GetInt(targetFile, "BrojTelefona") <= 0)
+        return SendClientMessage(playerid, 0xFF7777FF, "[SMS]: Taj igrac nema telefon ili broj.");
+    if(IgracKrediti[playerid] < 1)
+        return SendClientMessage(playerid, 0xFF7777FF, "[SMS]: Nemate telefonskog kredita. Kupite ga na trafici.");
+
+    IgracKrediti[playerid]--;
+    DOF2_SetInt(senderFile, "Krediti", IgracKrediti[playerid]);
+    DOF2_SaveFile();
+
+    new senderName[MAX_PLAYER_NAME], senderMessage[144], targetMessage[144];
+    GetPlayerName(playerid, senderName, sizeof(senderName));
+    format(senderMessage, sizeof(senderMessage), "[SMS za %d]: %s", DOF2_GetInt(targetFile, "BrojTelefona"), messageText);
+    SendClientMessage(playerid, 0x66CCFFFF, senderMessage);
+    format(targetMessage, sizeof(targetMessage), "[SMS od %s | %d]: %s", senderName, DOF2_GetInt(senderFile, "BrojTelefona"), messageText);
+    SendClientMessage(targetid, 0x66CCFFFF, targetMessage);
+    return 1;
+}
 CMD:smsad(playerid, params[])
 {
+    new smsadFile[128];
+    if(!GetPlayerAccountPath(playerid, smsadFile, sizeof(smsadFile)) ||
+       !DOF2_IsSet(smsadFile, "Telefon") || DOF2_GetInt(smsadFile, "BrojTelefona") <= 0)
+        return SendClientMessage(playerid, 0xFF7777FF, "[SMSAD]: Morate kupiti telefon i broj telefona.");
+    if(JuniorAdsMuted)
+        return SendClientMessage(playerid, 0xFF7777FF, "[OGLASI]: Administracija je privremeno ugasila oglase.");
     // 1. Globalni cooldown - provjera da li je prošla 1 minuta od posljednjeg oglasa
     if(gettime() - LastOglasTick < 60)
     {
@@ -6130,6 +6261,9 @@ CMD:smsad(playerid, params[])
         return SendClientMessage(playerid, -1, "{FF0000}[Greška] {FFFFFF}Tekst oglasa je prekratak.");
 
     // 4. Racunamo koliko oglas ima karaktera
+    if(IgracKrediti[playerid] < 1)
+        return SendClientMessage(playerid, 0xFF7777FF, "[SMSAD]: Nemate telefonskog kredita. Kupite ga na trafici.");
+
     new brojKaraktera = strlen(tekst);
 
     // 5. Provjera novca
@@ -6145,6 +6279,7 @@ CMD:smsad(playerid, params[])
 
     // 7. Oduzimamo novac igracu i cuvamo preko DOF2
     GivePlayerMoney(playerid, -brojKaraktera);
+    IgracKrediti[playerid]--;
 
     new file[64], pname[MAX_PLAYER_NAME];
     GetPlayerName(playerid, pname, sizeof(pname));
@@ -6153,6 +6288,7 @@ CMD:smsad(playerid, params[])
     if(DOF2_FileExists(file))
     {
         DOF2_SetInt(file, "Novac", GetPlayerMoney(playerid));
+        DOF2_SetInt(file, "Krediti", IgracKrediti[playerid]);
         DOF2_SaveFile();
     }
 
@@ -6174,7 +6310,7 @@ CMD:smsad(playerid, params[])
 
     // 9. Obavještenje igracu
     new string_info[128];
-    format(string_info, sizeof(string_info), "{FF0000}[Telefon] {FFFFFF}Oduzeto vam je $%d za slanje oglasa.", brojKaraktera);
+    format(string_info, sizeof(string_info), "{FF0000}[Telefon] {FFFFFF}Oduzeto vam je %d RSD i 1 kredit za slanje oglasa.", brojKaraktera);
     SendClientMessage(playerid, -1, string_info);
 
     return 1;
@@ -6773,9 +6909,9 @@ CMD:kupisat(playerid, params[])
 stock InitRevolutionHud()
 {
     // Geometrija, fontovi i boje su iz DTD.pwn. Dinamicke vrijednosti su PlayerTextDrawovi.
-    TD_DTD[0] = TextDrawCreate(444.000000, 3.000000, "B");
+    TD_DTD[0] = TextDrawCreate(500.000000, 2.000000, "B");
     TextDrawFont(TD_DTD[0], 2);
-    TextDrawLetterSize(TD_DTD[0], 0.662499, 2.499999);
+    TextDrawLetterSize(TD_DTD[0], 0.395832, 2.749998);
     TextDrawTextSize(TD_DTD[0], 400.000000, 17.000000);
     TextDrawSetOutline(TD_DTD[0], 1);
     TextDrawSetShadow(TD_DTD[0], 3);
@@ -6786,9 +6922,9 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[0], 0);
     TextDrawSetProportional(TD_DTD[0], 1);
     TextDrawSetSelectable(TD_DTD[0], 0);
-    TD_DTD[1] = TextDrawCreate(460.000000, 9.000000, "alkan");
+    TD_DTD[1] = TextDrawCreate(510.000000, 13.000000, "alkan");
     TextDrawFont(TD_DTD[1], 2);
-    TextDrawLetterSize(TD_DTD[1], 0.412499, 1.600000);
+    TextDrawLetterSize(TD_DTD[1], 0.291664, 1.200000);
     TextDrawTextSize(TD_DTD[1], 400.000000, 17.000000);
     TextDrawSetOutline(TD_DTD[1], 1);
     TextDrawSetShadow(TD_DTD[1], 3);
@@ -6799,9 +6935,9 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[1], 0);
     TextDrawSetProportional(TD_DTD[1], 1);
     TextDrawSetSelectable(TD_DTD[1], 0);
-    TD_DTD[2] = TextDrawCreate(519.000000, 3.000000, "R");
+    TD_DTD[2] = TextDrawCreate(552.000000, 2.000000, "R");
     TextDrawFont(TD_DTD[2], 2);
-    TextDrawLetterSize(TD_DTD[2], 0.662499, 2.499999);
+    TextDrawLetterSize(TD_DTD[2], 0.395000, 2.740000);
     TextDrawTextSize(TD_DTD[2], 400.000000, 17.000000);
     TextDrawSetOutline(TD_DTD[2], 1);
     TextDrawSetShadow(TD_DTD[2], 3);
@@ -6812,9 +6948,9 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[2], 0);
     TextDrawSetProportional(TD_DTD[2], 1);
     TextDrawSetSelectable(TD_DTD[2], 0);
-    TD_DTD[3] = TextDrawCreate(536.000000, 9.000000, "evolution");
+    TD_DTD[3] = TextDrawCreate(562.000000, 13.000000, "evolution");
     TextDrawFont(TD_DTD[3], 2);
-    TextDrawLetterSize(TD_DTD[3], 0.412000, 1.600000);
+    TextDrawLetterSize(TD_DTD[3], 0.289999, 1.200000);
     TextDrawTextSize(TD_DTD[3], 400.000000, 17.000000);
     TextDrawSetOutline(TD_DTD[3], 1);
     TextDrawSetShadow(TD_DTD[3], 3);
@@ -6916,7 +7052,7 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[10], 1);
     TextDrawSetProportional(TD_DTD[10], 1);
     TextDrawSetSelectable(TD_DTD[10], 0);
-    TD_DTD[11] = TextDrawCreate(0.000000, 429.000000, "LogoDiagonal:dia1");
+    TD_DTD[11] = TextDrawCreate(0.000000, 430.000000, "LogoDiagonal:dia1");
     TextDrawFont(TD_DTD[11], 4);
     TextDrawLetterSize(TD_DTD[11], 0.600000, 2.000000);
     TextDrawTextSize(TD_DTD[11], 17.000000, 17.000000);
@@ -7166,7 +7302,7 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[31], 0);
     TextDrawSetProportional(TD_DTD[31], 1);
     TextDrawSetSelectable(TD_DTD[31], 0);
-    TD_DTD[32] = TextDrawCreate(640.000000, 429.000000, "LogoDiagonal:dia1");
+    TD_DTD[32] = TextDrawCreate(640.000000, 430.000000, "LogoDiagonal:dia1");
     TextDrawFont(TD_DTD[32], 4);
     TextDrawLetterSize(TD_DTD[32], 0.600000, 2.000000);
     TextDrawTextSize(TD_DTD[32], -17.000000, 17.000000);
@@ -7218,9 +7354,9 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[37], 0);
     TextDrawSetProportional(TD_DTD[37], 1);
     TextDrawSetSelectable(TD_DTD[37], 0);
-    TD_DTD[41] = TextDrawCreate(574.000000, 351.899993, "_");
+    TD_DTD[41] = TextDrawCreate(560.000000, 343.899993, "_");
     TextDrawFont(TD_DTD[41], 1);
-    TextDrawLetterSize(TD_DTD[41], 0.600000, 8.399994);
+    TextDrawLetterSize(TD_DTD[41], 0.600000, 8.399991);
     TextDrawTextSize(TD_DTD[41], 317.500000, 130.000000);
     TextDrawSetOutline(TD_DTD[41], 1);
     TextDrawSetShadow(TD_DTD[41], 0);
@@ -7231,9 +7367,9 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[41], 1);
     TextDrawSetProportional(TD_DTD[41], 1);
     TextDrawSetSelectable(TD_DTD[41], 0);
-    TD_DTD[42] = TextDrawCreate(508.000000, 353.000000, "_");
+    TD_DTD[42] = TextDrawCreate(493.000000, 344.000000, "_");
     TextDrawFont(TD_DTD[42], 1);
-    TextDrawLetterSize(TD_DTD[42], 0.600000, 8.399994);
+    TextDrawLetterSize(TD_DTD[42], 0.600000, 8.399991);
     TextDrawTextSize(TD_DTD[42], 306.500000, -4.000000);
     TextDrawSetOutline(TD_DTD[42], 1);
     TextDrawSetShadow(TD_DTD[42], 0);
@@ -7244,10 +7380,10 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[42], 1);
     TextDrawSetProportional(TD_DTD[42], 1);
     TextDrawSetSelectable(TD_DTD[42], 0);
-    TD_DTD[43] = TextDrawCreate(546.000000, 372.000000, "_");
+    TD_DTD[43] = TextDrawCreate(558.900024, 423.000000, "_");
     TextDrawFont(TD_DTD[43], 1);
-    TextDrawLetterSize(TD_DTD[43], 0.600000, 6.199986);
-    TextDrawTextSize(TD_DTD[43], 306.500000, -4.000000);
+    TextDrawLetterSize(TD_DTD[43], 0.600000, -0.150000);
+    TextDrawTextSize(TD_DTD[43], 479.000000, 130.500000);
     TextDrawSetOutline(TD_DTD[43], 1);
     TextDrawSetShadow(TD_DTD[43], 0);
     TextDrawAlignment(TD_DTD[43], 2);
@@ -7257,7 +7393,7 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[43], 1);
     TextDrawSetProportional(TD_DTD[43], 1);
     TextDrawSetSelectable(TD_DTD[43], 0);
-    TD_DTD[44] = TextDrawCreate(574.000000, 371.000000, "_");
+    TD_DTD[44] = TextDrawCreate(560.000000, 363.000000, "_");
     TextDrawFont(TD_DTD[44], 1);
     TextDrawLetterSize(TD_DTD[44], 0.600000, -0.150000);
     TextDrawTextSize(TD_DTD[44], 479.000000, 130.500000);
@@ -7270,7 +7406,7 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[44], 1);
     TextDrawSetProportional(TD_DTD[44], 1);
     TextDrawSetSelectable(TD_DTD[44], 0);
-    TD_DTD[45] = TextDrawCreate(573.900024, 352.000000, "_");
+    TD_DTD[45] = TextDrawCreate(558.900024, 342.000000, "_");
     TextDrawFont(TD_DTD[45], 1);
     TextDrawLetterSize(TD_DTD[45], 0.600000, -0.150000);
     TextDrawTextSize(TD_DTD[45], 479.000000, 130.500000);
@@ -7283,25 +7419,25 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[45], 1);
     TextDrawSetProportional(TD_DTD[45], 1);
     TextDrawSetSelectable(TD_DTD[45], 0);
-    TD_DTD[48] = TextDrawCreate(514.000000, 402.000000, "km/h");
-    TextDrawFont(TD_DTD[48], 2);
-    TextDrawLetterSize(TD_DTD[48], 0.237499, 1.100000);
-    TextDrawTextSize(TD_DTD[48], 400.000000, 17.000000);
-    TextDrawSetOutline(TD_DTD[48], 1);
-    TextDrawSetShadow(TD_DTD[48], 0);
-    TextDrawAlignment(TD_DTD[48], 1);
-    TextDrawColor(TD_DTD[48], -1);
-    TextDrawBackgroundColor(TD_DTD[48], 255);
-    TextDrawBoxColor(TD_DTD[48], 50);
-    TextDrawUseBox(TD_DTD[48], 0);
-    TextDrawSetProportional(TD_DTD[48], 1);
-    TextDrawSetSelectable(TD_DTD[48], 0);
-    TD_DTD[49] = TextDrawCreate(586.000000, 375.000000, "Gorivo:");
+    TD_DTD[47] = TextDrawCreate(526.000000, 364.000000, "BRZINA:");
+    TextDrawFont(TD_DTD[47], 2);
+    TextDrawLetterSize(TD_DTD[47], 0.174999, 1.299998);
+    TextDrawTextSize(TD_DTD[47], 400.000000, 17.000000);
+    TextDrawSetOutline(TD_DTD[47], 0);
+    TextDrawSetShadow(TD_DTD[47], 1);
+    TextDrawAlignment(TD_DTD[47], 3);
+    TextDrawColor(TD_DTD[47], -1);
+    TextDrawBackgroundColor(TD_DTD[47], 255);
+    TextDrawBoxColor(TD_DTD[47], 50);
+    TextDrawUseBox(TD_DTD[47], 0);
+    TextDrawSetProportional(TD_DTD[47], 1);
+    TextDrawSetSelectable(TD_DTD[47], 0);
+    TD_DTD[49] = TextDrawCreate(558.000000, 364.000000, "KM/H");
     TextDrawFont(TD_DTD[49], 2);
-    TextDrawLetterSize(TD_DTD[49], 0.212500, 0.899999);
+    TextDrawLetterSize(TD_DTD[49], 0.174999, 1.299998);
     TextDrawTextSize(TD_DTD[49], 400.000000, 17.000000);
-    TextDrawSetOutline(TD_DTD[49], 1);
-    TextDrawSetShadow(TD_DTD[49], 0);
+    TextDrawSetOutline(TD_DTD[49], 0);
+    TextDrawSetShadow(TD_DTD[49], 1);
     TextDrawAlignment(TD_DTD[49], 3);
     TextDrawColor(TD_DTD[49], -1);
     TextDrawBackgroundColor(TD_DTD[49], 255);
@@ -7309,12 +7445,12 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[49], 0);
     TextDrawSetProportional(TD_DTD[49], 1);
     TextDrawSetSelectable(TD_DTD[49], 0);
-    TD_DTD[50] = TextDrawCreate(582.000000, 387.000000, "VRSTA:");
+    TD_DTD[50] = TextDrawCreate(527.000000, 374.000000, "GORIVO:");
     TextDrawFont(TD_DTD[50], 2);
-    TextDrawLetterSize(TD_DTD[50], 0.212500, 0.899999);
+    TextDrawLetterSize(TD_DTD[50], 0.174999, 1.299998);
     TextDrawTextSize(TD_DTD[50], 400.000000, 17.000000);
-    TextDrawSetOutline(TD_DTD[50], 1);
-    TextDrawSetShadow(TD_DTD[50], 0);
+    TextDrawSetOutline(TD_DTD[50], 0);
+    TextDrawSetShadow(TD_DTD[50], 1);
     TextDrawAlignment(TD_DTD[50], 3);
     TextDrawColor(TD_DTD[50], -1);
     TextDrawBackgroundColor(TD_DTD[50], 255);
@@ -7322,12 +7458,12 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[50], 0);
     TextDrawSetProportional(TD_DTD[50], 1);
     TextDrawSetSelectable(TD_DTD[50], 0);
-    TD_DTD[51] = TextDrawCreate(599.000000, 398.000000, "KILOMETRI:");
+    TD_DTD[51] = TextDrawCreate(524.000000, 384.000000, "VRSTA:");
     TextDrawFont(TD_DTD[51], 2);
-    TextDrawLetterSize(TD_DTD[51], 0.212500, 0.899999);
+    TextDrawLetterSize(TD_DTD[51], 0.174999, 1.299998);
     TextDrawTextSize(TD_DTD[51], 400.000000, 17.000000);
-    TextDrawSetOutline(TD_DTD[51], 1);
-    TextDrawSetShadow(TD_DTD[51], 0);
+    TextDrawSetOutline(TD_DTD[51], 0);
+    TextDrawSetShadow(TD_DTD[51], 1);
     TextDrawAlignment(TD_DTD[51], 3);
     TextDrawColor(TD_DTD[51], -1);
     TextDrawBackgroundColor(TD_DTD[51], 255);
@@ -7335,12 +7471,12 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[51], 0);
     TextDrawSetProportional(TD_DTD[51], 1);
     TextDrawSetSelectable(TD_DTD[51], 0);
-    TD_DTD[52] = TextDrawCreate(592.000000, 410.000000, "KVAROVI:");
+    TD_DTD[52] = TextDrawCreate(537.000000, 394.000000, "KILOMETRI:");
     TextDrawFont(TD_DTD[52], 2);
-    TextDrawLetterSize(TD_DTD[52], 0.212500, 0.899999);
+    TextDrawLetterSize(TD_DTD[52], 0.174999, 1.299998);
     TextDrawTextSize(TD_DTD[52], 400.000000, 17.000000);
-    TextDrawSetOutline(TD_DTD[52], 1);
-    TextDrawSetShadow(TD_DTD[52], 0);
+    TextDrawSetOutline(TD_DTD[52], 0);
+    TextDrawSetShadow(TD_DTD[52], 1);
     TextDrawAlignment(TD_DTD[52], 3);
     TextDrawColor(TD_DTD[52], -1);
     TextDrawBackgroundColor(TD_DTD[52], 255);
@@ -7348,32 +7484,45 @@ stock InitRevolutionHud()
     TextDrawUseBox(TD_DTD[52], 0);
     TextDrawSetProportional(TD_DTD[52], 1);
     TextDrawSetSelectable(TD_DTD[52], 0);
-    TD_DTD[57] = TextDrawCreate(610.000000, 376.000000, "/");
-    TextDrawFont(TD_DTD[57], 2);
-    TextDrawLetterSize(TD_DTD[57], 0.150000, 0.899999);
-    TextDrawTextSize(TD_DTD[57], 400.000000, 17.000000);
-    TextDrawSetOutline(TD_DTD[57], 1);
-    TextDrawSetShadow(TD_DTD[57], 0);
-    TextDrawAlignment(TD_DTD[57], 1);
-    TextDrawColor(TD_DTD[57], -1);
-    TextDrawBackgroundColor(TD_DTD[57], 255);
-    TextDrawBoxColor(TD_DTD[57], 50);
-    TextDrawUseBox(TD_DTD[57], 0);
-    TextDrawSetProportional(TD_DTD[57], 1);
-    TextDrawSetSelectable(TD_DTD[57], 0);
-    TD_DTD[59] = TextDrawCreate(600.000000, 410.500000, "/");
-    TextDrawFont(TD_DTD[59], 2);
-    TextDrawLetterSize(TD_DTD[59], 0.150000, 0.899999);
-    TextDrawTextSize(TD_DTD[59], 400.000000, 17.000000);
-    TextDrawSetOutline(TD_DTD[59], 1);
-    TextDrawSetShadow(TD_DTD[59], 0);
-    TextDrawAlignment(TD_DTD[59], 1);
-    TextDrawColor(TD_DTD[59], -1);
-    TextDrawBackgroundColor(TD_DTD[59], 255);
-    TextDrawBoxColor(TD_DTD[59], 50);
-    TextDrawUseBox(TD_DTD[59], 0);
-    TextDrawSetProportional(TD_DTD[59], 1);
-    TextDrawSetSelectable(TD_DTD[59], 0);
+    TD_DTD[53] = TextDrawCreate(498.000000, 405.000000, "KVAROVI:");
+    TextDrawFont(TD_DTD[53], 2);
+    TextDrawLetterSize(TD_DTD[53], 0.174999, 1.299998);
+    TextDrawTextSize(TD_DTD[53], 400.000000, 17.000000);
+    TextDrawSetOutline(TD_DTD[53], 0);
+    TextDrawSetShadow(TD_DTD[53], 1);
+    TextDrawAlignment(TD_DTD[53], 1);
+    TextDrawColor(TD_DTD[53], -1);
+    TextDrawBackgroundColor(TD_DTD[53], 255);
+    TextDrawBoxColor(TD_DTD[53], 50);
+    TextDrawUseBox(TD_DTD[53], 0);
+    TextDrawSetProportional(TD_DTD[53], 1);
+    TextDrawSetSelectable(TD_DTD[53], 0);
+    TD_DTD[56] = TextDrawCreate(626.000000, 342.000000, "_");
+    TextDrawFont(TD_DTD[56], 1);
+    TextDrawLetterSize(TD_DTD[56], 0.600000, 8.849993);
+    TextDrawTextSize(TD_DTD[56], 306.500000, -4.000000);
+    TextDrawSetOutline(TD_DTD[56], 1);
+    TextDrawSetShadow(TD_DTD[56], 0);
+    TextDrawAlignment(TD_DTD[56], 2);
+    TextDrawColor(TD_DTD[56], -1);
+    TextDrawBackgroundColor(TD_DTD[56], 255);
+    TextDrawBoxColor(TD_DTD[56], 1097458175);
+    TextDrawUseBox(TD_DTD[56], 1);
+    TextDrawSetProportional(TD_DTD[56], 1);
+    TextDrawSetSelectable(TD_DTD[56], 0);
+    TD_DTD[61] = TextDrawCreate(538.000000, 405.000000, "/");
+    TextDrawFont(TD_DTD[61], 2);
+    TextDrawLetterSize(TD_DTD[61], 0.174999, 1.299998);
+    TextDrawTextSize(TD_DTD[61], 400.000000, 17.000000);
+    TextDrawSetOutline(TD_DTD[61], 0);
+    TextDrawSetShadow(TD_DTD[61], 1);
+    TextDrawAlignment(TD_DTD[61], 1);
+    TextDrawColor(TD_DTD[61], -1);
+    TextDrawBackgroundColor(TD_DTD[61], 255);
+    TextDrawBoxColor(TD_DTD[61], 50);
+    TextDrawUseBox(TD_DTD[61], 0);
+    TextDrawSetProportional(TD_DTD[61], 1);
+    TextDrawSetSelectable(TD_DTD[61], 0);
     TD_HudPoruka = TD_DTD[13];
     return 1;
 }
@@ -7430,15 +7579,59 @@ stock CreateRevolutionPlayerHud(playerid)
     PlayerTextDrawUseBox(playerid, TD_HudDatum[playerid], 0);
     PlayerTextDrawSetProportional(playerid, TD_HudDatum[playerid], 1);
     PlayerTextDrawSetSelectable(playerid, TD_HudDatum[playerid], 0);
-    TD_WantedHint[playerid] = CreatePlayerTextDraw(playerid, 505.000000, 416.000000, "IMATE 1 WANTED LEVELA  /DOSIJE");
+    TD_WantedHint[playerid] = CreatePlayerTextDraw(playerid, 277.000000, 356.000000, "TRAZENI STE");
     PlayerTextDrawFont(playerid, TD_WantedHint[playerid], 2);
-    PlayerTextDrawLetterSize(playerid, TD_WantedHint[playerid], 0.195000, 0.950000);
-    PlayerTextDrawAlignment(playerid, TD_WantedHint[playerid], 2);
-    PlayerTextDrawColor(playerid, TD_WantedHint[playerid], 0xFF7777FF);
+    PlayerTextDrawLetterSize(playerid, TD_WantedHint[playerid], 0.320833, 1.250000);
+    PlayerTextDrawTextSize(playerid, TD_WantedHint[playerid], 400.000000, 17.000000);
     PlayerTextDrawSetOutline(playerid, TD_WantedHint[playerid], 1);
-    PlayerTextDrawBackgroundColor(playerid, TD_WantedHint[playerid], 0x000000FF);
+    PlayerTextDrawSetShadow(playerid, TD_WantedHint[playerid], 2);
+    PlayerTextDrawAlignment(playerid, TD_WantedHint[playerid], 1);
+    PlayerTextDrawColor(playerid, TD_WantedHint[playerid], 0x8B0000FF);
+    PlayerTextDrawBackgroundColor(playerid, TD_WantedHint[playerid], 255);
+    PlayerTextDrawBoxColor(playerid, TD_WantedHint[playerid], 50);
+    PlayerTextDrawUseBox(playerid, TD_WantedHint[playerid], 0);
     PlayerTextDrawSetProportional(playerid, TD_WantedHint[playerid], 1);
     PlayerTextDrawSetSelectable(playerid, TD_WantedHint[playerid], 0);
+
+    TD_WantedPolice[playerid] = CreatePlayerTextDraw(playerid, 261.000000, 370.000000, "JURI VAS ~b~POLICIJA");
+    PlayerTextDrawFont(playerid, TD_WantedPolice[playerid], 2);
+    PlayerTextDrawLetterSize(playerid, TD_WantedPolice[playerid], 0.320833, 1.250000);
+    PlayerTextDrawTextSize(playerid, TD_WantedPolice[playerid], 400.000000, 17.000000);
+    PlayerTextDrawSetOutline(playerid, TD_WantedPolice[playerid], 1);
+    PlayerTextDrawSetShadow(playerid, TD_WantedPolice[playerid], 0);
+    PlayerTextDrawAlignment(playerid, TD_WantedPolice[playerid], 1);
+    PlayerTextDrawColor(playerid, TD_WantedPolice[playerid], 0x8B0000FF);
+    PlayerTextDrawBackgroundColor(playerid, TD_WantedPolice[playerid], 255);
+    PlayerTextDrawBoxColor(playerid, TD_WantedPolice[playerid], 50);
+    PlayerTextDrawUseBox(playerid, TD_WantedPolice[playerid], 0);
+    PlayerTextDrawSetProportional(playerid, TD_WantedPolice[playerid], 1);
+    PlayerTextDrawSetSelectable(playerid, TD_WantedPolice[playerid], 0);
+
+    TD_WantedDosije[playerid] = CreatePlayerTextDraw(playerid, 291.000000, 384.000000, "/DOSIJE");
+    PlayerTextDrawFont(playerid, TD_WantedDosije[playerid], 2);
+    PlayerTextDrawLetterSize(playerid, TD_WantedDosije[playerid], 0.320833, 1.250000);
+    PlayerTextDrawTextSize(playerid, TD_WantedDosije[playerid], 400.000000, 17.000000);
+    PlayerTextDrawSetOutline(playerid, TD_WantedDosije[playerid], 1);
+    PlayerTextDrawSetShadow(playerid, TD_WantedDosije[playerid], 0);
+    PlayerTextDrawAlignment(playerid, TD_WantedDosije[playerid], 1);
+    PlayerTextDrawColor(playerid, TD_WantedDosije[playerid], 0x8B0000FF);
+    PlayerTextDrawBackgroundColor(playerid, TD_WantedDosije[playerid], 255);
+    PlayerTextDrawBoxColor(playerid, TD_WantedDosije[playerid], 50);
+    PlayerTextDrawUseBox(playerid, TD_WantedDosije[playerid], 0);
+    PlayerTextDrawSetProportional(playerid, TD_WantedDosije[playerid], 1);
+    PlayerTextDrawSetSelectable(playerid, TD_WantedDosije[playerid], 0);
+
+    TD_WantedStars[playerid] = CreatePlayerTextDraw(playerid, 320.000000, 399.000000, "]");
+    PlayerTextDrawFont(playerid, TD_WantedStars[playerid], 0);
+    PlayerTextDrawLetterSize(playerid, TD_WantedStars[playerid], 0.320833, 1.250000);
+    PlayerTextDrawTextSize(playerid, TD_WantedStars[playerid], 640.000000, 17.000000);
+    PlayerTextDrawAlignment(playerid, TD_WantedStars[playerid], 2);
+    PlayerTextDrawColor(playerid, TD_WantedStars[playerid], 0xFFD700FF);
+    PlayerTextDrawSetOutline(playerid, TD_WantedStars[playerid], 1);
+    PlayerTextDrawSetShadow(playerid, TD_WantedStars[playerid], 2);
+    PlayerTextDrawBackgroundColor(playerid, TD_WantedStars[playerid], 0x000000FF);
+    PlayerTextDrawSetProportional(playerid, TD_WantedStars[playerid], 1);
+    PlayerTextDrawSetSelectable(playerid, TD_WantedStars[playerid], 0);
     TD_HudVrijeme[playerid] = CreatePlayerTextDraw(playerid, 543.000000, 434.000000, "00:00");
     PlayerTextDrawFont(playerid, TD_HudVrijeme[playerid], 2);
     PlayerTextDrawLetterSize(playerid, TD_HudVrijeme[playerid], 0.158000, 0.899999);
@@ -7517,51 +7710,51 @@ stock CreateRevolutionPlayerHud(playerid)
     PlayerTextDrawUseBox(playerid, TD_Lokacija[playerid], 0);
     PlayerTextDrawSetProportional(playerid, TD_Lokacija[playerid], 1);
     PlayerTextDrawSetSelectable(playerid, TD_Lokacija[playerid], 0);
-    TD_Vozilo[playerid][0] = CreatePlayerTextDraw(playerid, 614.000000, 354.000000, "IME AUTA");
+    TD_Vozilo[playerid][0] = CreatePlayerTextDraw(playerid, 560.000000, 345.000000, "- IME VOZILA -");
     PlayerTextDrawFont(playerid, TD_Vozilo[playerid][0], 2);
     PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][0], 0.404166, 1.399999);
     PlayerTextDrawTextSize(playerid, TD_Vozilo[playerid][0], 400.000000, 17.000000);
-    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][0], 1);
-    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][0], 0);
-    PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][0], 3);
+    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][0], 0);
+    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][0], 1);
+    PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][0], 2);
     PlayerTextDrawColor(playerid, TD_Vozilo[playerid][0], -1);
     PlayerTextDrawBackgroundColor(playerid, TD_Vozilo[playerid][0], 255);
     PlayerTextDrawBoxColor(playerid, TD_Vozilo[playerid][0], 50);
     PlayerTextDrawUseBox(playerid, TD_Vozilo[playerid][0], 0);
     PlayerTextDrawSetProportional(playerid, TD_Vozilo[playerid][0], 1);
     PlayerTextDrawSetSelectable(playerid, TD_Vozilo[playerid][0], 0);
-    TD_Vozilo[playerid][1] = CreatePlayerTextDraw(playerid, 510.000000, 377.000000, "192");
+    TD_Vozilo[playerid][1] = CreatePlayerTextDraw(playerid, 527.000000, 364.000000, "100");
     PlayerTextDrawFont(playerid, TD_Vozilo[playerid][1], 2);
-    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][1], 0.466666, 1.799999);
+    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][1], 0.174999, 1.299998);
     PlayerTextDrawTextSize(playerid, TD_Vozilo[playerid][1], 400.000000, 17.000000);
-    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][1], 1);
-    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][1], 0);
+    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][1], 0);
+    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][1], 1);
     PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][1], 1);
-    PlayerTextDrawColor(playerid, TD_Vozilo[playerid][1], 2094792959);
+    PlayerTextDrawColor(playerid, TD_Vozilo[playerid][1], 1433087999);
     PlayerTextDrawBackgroundColor(playerid, TD_Vozilo[playerid][1], 255);
     PlayerTextDrawBoxColor(playerid, TD_Vozilo[playerid][1], 50);
     PlayerTextDrawUseBox(playerid, TD_Vozilo[playerid][1], 0);
     PlayerTextDrawSetProportional(playerid, TD_Vozilo[playerid][1], 1);
     PlayerTextDrawSetSelectable(playerid, TD_Vozilo[playerid][1], 0);
-    TD_Vozilo[playerid][2] = CreatePlayerTextDraw(playerid, 590.000000, 375.000000, "236.2");
+    TD_Vozilo[playerid][2] = CreatePlayerTextDraw(playerid, 544.000000, 374.000000, "70.0");
     PlayerTextDrawFont(playerid, TD_Vozilo[playerid][2], 2);
-    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][2], 0.150000, 0.899999);
+    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][2], 0.174999, 1.299998);
     PlayerTextDrawTextSize(playerid, TD_Vozilo[playerid][2], 400.000000, 17.000000);
-    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][2], 1);
-    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][2], 0);
-    PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][2], 1);
+    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][2], 0);
+    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][2], 1);
+    PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][2], 3);
     PlayerTextDrawColor(playerid, TD_Vozilo[playerid][2], -1);
     PlayerTextDrawBackgroundColor(playerid, TD_Vozilo[playerid][2], 255);
     PlayerTextDrawBoxColor(playerid, TD_Vozilo[playerid][2], 50);
     PlayerTextDrawUseBox(playerid, TD_Vozilo[playerid][2], 0);
     PlayerTextDrawSetProportional(playerid, TD_Vozilo[playerid][2], 1);
     PlayerTextDrawSetSelectable(playerid, TD_Vozilo[playerid][2], 0);
-    TD_Vozilo[playerid][3] = CreatePlayerTextDraw(playerid, 585.000000, 387.000000, "NAFTA");
+    TD_Vozilo[playerid][3] = CreatePlayerTextDraw(playerid, 525.000000, 384.000000, "BENZIN");
     PlayerTextDrawFont(playerid, TD_Vozilo[playerid][3], 2);
-    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][3], 0.150000, 0.899999);
+    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][3], 0.174999, 1.299998);
     PlayerTextDrawTextSize(playerid, TD_Vozilo[playerid][3], 400.000000, 17.000000);
-    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][3], 1);
-    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][3], 0);
+    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][3], 0);
+    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][3], 1);
     PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][3], 1);
     PlayerTextDrawColor(playerid, TD_Vozilo[playerid][3], -1);
     PlayerTextDrawBackgroundColor(playerid, TD_Vozilo[playerid][3], 255);
@@ -7569,12 +7762,12 @@ stock CreateRevolutionPlayerHud(playerid)
     PlayerTextDrawUseBox(playerid, TD_Vozilo[playerid][3], 0);
     PlayerTextDrawSetProportional(playerid, TD_Vozilo[playerid][3], 1);
     PlayerTextDrawSetSelectable(playerid, TD_Vozilo[playerid][3], 0);
-    TD_Vozilo[playerid][4] = CreatePlayerTextDraw(playerid, 602.000000, 398.000000, "8553");
+    TD_Vozilo[playerid][4] = CreatePlayerTextDraw(playerid, 538.000000, 394.000000, "85590");
     PlayerTextDrawFont(playerid, TD_Vozilo[playerid][4], 2);
-    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][4], 0.150000, 0.899999);
+    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][4], 0.174999, 1.299998);
     PlayerTextDrawTextSize(playerid, TD_Vozilo[playerid][4], 400.000000, 17.000000);
-    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][4], 1);
-    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][4], 0);
+    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][4], 0);
+    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][4], 1);
     PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][4], 1);
     PlayerTextDrawColor(playerid, TD_Vozilo[playerid][4], -1);
     PlayerTextDrawBackgroundColor(playerid, TD_Vozilo[playerid][4], 255);
@@ -7582,12 +7775,12 @@ stock CreateRevolutionPlayerHud(playerid)
     PlayerTextDrawUseBox(playerid, TD_Vozilo[playerid][4], 0);
     PlayerTextDrawSetProportional(playerid, TD_Vozilo[playerid][4], 1);
     PlayerTextDrawSetSelectable(playerid, TD_Vozilo[playerid][4], 0);
-    TD_Vozilo[playerid][5] = CreatePlayerTextDraw(playerid, 594.000000, 410.000000, "3");
+    TD_Vozilo[playerid][5] = CreatePlayerTextDraw(playerid, 533.000000, 405.000000, "5");
     PlayerTextDrawFont(playerid, TD_Vozilo[playerid][5], 2);
-    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][5], 0.150000, 0.899999);
+    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][5], 0.174999, 1.299998);
     PlayerTextDrawTextSize(playerid, TD_Vozilo[playerid][5], 400.000000, 17.000000);
-    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][5], 1);
-    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][5], 0);
+    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][5], 0);
+    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][5], 1);
     PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][5], 1);
     PlayerTextDrawColor(playerid, TD_Vozilo[playerid][5], -1);
     PlayerTextDrawBackgroundColor(playerid, TD_Vozilo[playerid][5], 255);
@@ -7595,25 +7788,25 @@ stock CreateRevolutionPlayerHud(playerid)
     PlayerTextDrawUseBox(playerid, TD_Vozilo[playerid][5], 0);
     PlayerTextDrawSetProportional(playerid, TD_Vozilo[playerid][5], 1);
     PlayerTextDrawSetSelectable(playerid, TD_Vozilo[playerid][5], 0);
-    TD_Vozilo[playerid][6] = CreatePlayerTextDraw(playerid, 615.000000, 375.000000, "250.0");
+    TD_Vozilo[playerid][6] = CreatePlayerTextDraw(playerid, 564.000000, 374.000000, "70.0");
     PlayerTextDrawFont(playerid, TD_Vozilo[playerid][6], 2);
-    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][6], 0.150000, 0.899999);
+    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][6], 0.174999, 1.299998);
     PlayerTextDrawTextSize(playerid, TD_Vozilo[playerid][6], 400.000000, 17.000000);
-    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][6], 1);
-    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][6], 0);
-    PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][6], 1);
+    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][6], 0);
+    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][6], 1);
+    PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][6], 3);
     PlayerTextDrawColor(playerid, TD_Vozilo[playerid][6], -16776961);
     PlayerTextDrawBackgroundColor(playerid, TD_Vozilo[playerid][6], 255);
     PlayerTextDrawBoxColor(playerid, TD_Vozilo[playerid][6], 50);
     PlayerTextDrawUseBox(playerid, TD_Vozilo[playerid][6], 0);
     PlayerTextDrawSetProportional(playerid, TD_Vozilo[playerid][6], 1);
     PlayerTextDrawSetSelectable(playerid, TD_Vozilo[playerid][6], 0);
-    TD_Vozilo[playerid][7] = CreatePlayerTextDraw(playerid, 605.000000, 410.000000, "5");
+    TD_Vozilo[playerid][7] = CreatePlayerTextDraw(playerid, 542.000000, 405.000000, "5");
     PlayerTextDrawFont(playerid, TD_Vozilo[playerid][7], 2);
-    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][7], 0.150000, 0.899999);
+    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][7], 0.174999, 1.299998);
     PlayerTextDrawTextSize(playerid, TD_Vozilo[playerid][7], 400.000000, 17.000000);
-    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][7], 1);
-    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][7], 0);
+    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][7], 0);
+    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][7], 1);
     PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][7], 1);
     PlayerTextDrawColor(playerid, TD_Vozilo[playerid][7], -16776961);
     PlayerTextDrawBackgroundColor(playerid, TD_Vozilo[playerid][7], 255);
@@ -7621,6 +7814,58 @@ stock CreateRevolutionPlayerHud(playerid)
     PlayerTextDrawUseBox(playerid, TD_Vozilo[playerid][7], 0);
     PlayerTextDrawSetProportional(playerid, TD_Vozilo[playerid][7], 1);
     PlayerTextDrawSetSelectable(playerid, TD_Vozilo[playerid][7], 0);
+    TD_Vozilo[playerid][8] = CreatePlayerTextDraw(playerid, 548.000000, 374.000000, "/");
+    PlayerTextDrawFont(playerid, TD_Vozilo[playerid][8], 2);
+    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][8], 0.174999, 1.299998);
+    PlayerTextDrawTextSize(playerid, TD_Vozilo[playerid][8], 400.000000, 17.000000);
+    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][8], 0);
+    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][8], 1);
+    PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][8], 3);
+    PlayerTextDrawColor(playerid, TD_Vozilo[playerid][8], -1);
+    PlayerTextDrawBackgroundColor(playerid, TD_Vozilo[playerid][8], 255);
+    PlayerTextDrawBoxColor(playerid, TD_Vozilo[playerid][8], 50);
+    PlayerTextDrawUseBox(playerid, TD_Vozilo[playerid][8], 0);
+    PlayerTextDrawSetProportional(playerid, TD_Vozilo[playerid][8], 1);
+    PlayerTextDrawSetSelectable(playerid, TD_Vozilo[playerid][8], 0);
+    TD_Vozilo[playerid][9] = CreatePlayerTextDraw(playerid, 548.000000, 374.000000, "250.0");
+    PlayerTextDrawFont(playerid, TD_Vozilo[playerid][9], 2);
+    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][9], 0.174999, 1.299998);
+    PlayerTextDrawTextSize(playerid, TD_Vozilo[playerid][9], 400.000000, 17.000000);
+    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][9], 0);
+    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][9], 1);
+    PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][9], 3);
+    PlayerTextDrawColor(playerid, TD_Vozilo[playerid][9], -1);
+    PlayerTextDrawBackgroundColor(playerid, TD_Vozilo[playerid][9], 255);
+    PlayerTextDrawBoxColor(playerid, TD_Vozilo[playerid][9], 50);
+    PlayerTextDrawUseBox(playerid, TD_Vozilo[playerid][9], 0);
+    PlayerTextDrawSetProportional(playerid, TD_Vozilo[playerid][9], 1);
+    PlayerTextDrawSetSelectable(playerid, TD_Vozilo[playerid][9], 0);
+    TD_Vozilo[playerid][10] = CreatePlayerTextDraw(playerid, 552.000000, 374.000000, "/");
+    PlayerTextDrawFont(playerid, TD_Vozilo[playerid][10], 2);
+    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][10], 0.174999, 1.299998);
+    PlayerTextDrawTextSize(playerid, TD_Vozilo[playerid][10], 400.000000, 17.000000);
+    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][10], 0);
+    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][10], 1);
+    PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][10], 3);
+    PlayerTextDrawColor(playerid, TD_Vozilo[playerid][10], -1);
+    PlayerTextDrawBackgroundColor(playerid, TD_Vozilo[playerid][10], 255);
+    PlayerTextDrawBoxColor(playerid, TD_Vozilo[playerid][10], 50);
+    PlayerTextDrawUseBox(playerid, TD_Vozilo[playerid][10], 0);
+    PlayerTextDrawSetProportional(playerid, TD_Vozilo[playerid][10], 1);
+    PlayerTextDrawSetSelectable(playerid, TD_Vozilo[playerid][10], 0);
+    TD_Vozilo[playerid][11] = CreatePlayerTextDraw(playerid, 573.000000, 374.000000, "250.0");
+    PlayerTextDrawFont(playerid, TD_Vozilo[playerid][11], 2);
+    PlayerTextDrawLetterSize(playerid, TD_Vozilo[playerid][11], 0.174999, 1.299998);
+    PlayerTextDrawTextSize(playerid, TD_Vozilo[playerid][11], 400.000000, 17.000000);
+    PlayerTextDrawSetOutline(playerid, TD_Vozilo[playerid][11], 0);
+    PlayerTextDrawSetShadow(playerid, TD_Vozilo[playerid][11], 1);
+    PlayerTextDrawAlignment(playerid, TD_Vozilo[playerid][11], 3);
+    PlayerTextDrawColor(playerid, TD_Vozilo[playerid][11], -16776961);
+    PlayerTextDrawBackgroundColor(playerid, TD_Vozilo[playerid][11], 255);
+    PlayerTextDrawBoxColor(playerid, TD_Vozilo[playerid][11], 50);
+    PlayerTextDrawUseBox(playerid, TD_Vozilo[playerid][11], 0);
+    PlayerTextDrawSetProportional(playerid, TD_Vozilo[playerid][11], 1);
+    PlayerTextDrawSetSelectable(playerid, TD_Vozilo[playerid][11], 0);
     return 1;
 }
 
@@ -7629,12 +7874,15 @@ stock DestroyRevolutionPlayerHud(playerid)
     PlayerTextDrawDestroy(playerid, TD_HudDatum[playerid]);
     PlayerTextDrawDestroy(playerid, TD_HudVrijeme[playerid]);
     PlayerTextDrawDestroy(playerid, TD_WantedHint[playerid]);
+    PlayerTextDrawDestroy(playerid, TD_WantedPolice[playerid]);
+    PlayerTextDrawDestroy(playerid, TD_WantedDosije[playerid]);
+    PlayerTextDrawDestroy(playerid, TD_WantedStars[playerid]);
     PlayerTextDrawDestroy(playerid, TD_NovacPlavi[playerid]);
     PlayerTextDrawDestroy(playerid, TD_Euro[playerid]);
     PlayerTextDrawDestroy(playerid, TD_Zlato[playerid]);
     PlayerTextDrawDestroy(playerid, TD_Grad[playerid]);
     PlayerTextDrawDestroy(playerid, TD_Lokacija[playerid]);
-    for(new i = 0; i < 8; i++) PlayerTextDrawDestroy(playerid, TD_Vozilo[playerid][i]);
+    for(new i = 0; i < 12; i++) PlayerTextDrawDestroy(playerid, TD_Vozilo[playerid][i]);
     VoziloHudShown[playerid] = false;
     return 1;
 }
@@ -7656,6 +7904,23 @@ stock VehicleHudNoFuel(model)
 {
     return (model == 481 || model == 509 || model == 510 || model == 449 ||
             model == 537 || model == 538 || model == 569 || model == 570 || model == 590);
+}
+
+stock VehicleHudIsTruck(model)
+{
+    return (model == 403 || model == 406 || model == 407 || model == 408 ||
+            model == 414 || model == 416 || model == 428 || model == 431 ||
+            model == 437 || model == 443 || model == 455 || model == 456 ||
+            model == 498 || model == 499 || model == 514 || model == 515 ||
+            model == 524 || model == 525 || model == 531 || model == 544 ||
+            model == 552 || model == 578 || model == 582 || model == 588 || model == 609);
+}
+
+stock Float:VehicleHudFuelCapacity(model)
+{
+    if(VehicleHudNoFuel(model)) return 0.0;
+    if(VehicleHudIsTruck(model)) return 250.0;
+    return 70.0;
 }
 
 stock VehicleHudFuelType(model, output[], size)
@@ -7698,6 +7963,7 @@ stock VehicleHudRepair(vehicleid)
     VehicleHudStalled[vehicleid] = false;
     VehicleHudNextStartTry[vehicleid] = 0;
     VehicleHudNextStallAt[vehicleid] = 0;
+    VehicleHudLastDamage[vehicleid] = 0;
     return 1;
 }
 
@@ -7722,82 +7988,80 @@ public UpdateVehicleSpeed()
         if(!IsPlayerConnected(p)) continue;
         new playerState = GetPlayerState(p);
         if(playerState != PLAYER_STATE_DRIVER && playerState != PLAYER_STATE_PASSENGER) continue;
+
         new vehicleid = GetPlayerVehicleID(p);
         if(vehicleid <= 0 || vehicleid >= MAX_VEHICLES || !GetVehicleModel(vehicleid)) continue;
+
+        // /veh vozila imaju N/A podatke i skripta im nikada ne mijenja fiziku.
+        if(AdminSpawnedVehicle[vehicleid])
+        {
+            VehicleHudOutOfFuel[vehicleid] = false;
+            VehicleHudBrokenNotice[vehicleid] = false;
+            VehicleHudStalled[vehicleid] = false;
+            VehicleHudNextStallAt[vehicleid] = 0;
+            VehicleHudLastDamage[vehicleid] = 0;
+            if(VoziloHudShown[p]) VehicleHudUpdateSpeed(p, vehicleid);
+            continue;
+        }
+
         if(playerState == PLAYER_STATE_DRIVER)
         {
             new damage = VehicleHudDamageLevel(vehicleid);
-            if(damage == 5)
+            new engine, lights, alarm, doors, bonnet, boot, objective;
+            GetVehicleParamsEx(vehicleid, engine, lights, alarm, doors, bonnet, boot, objective);
+
+            if(damage >= 5)
             {
-                new engine, lights, alarm, doors, bonnet, boot, objective;
-                GetVehicleParamsEx(vehicleid, engine, lights, alarm, doors, bonnet, boot, objective);
-                if(engine != 0)
-                    SetVehicleParamsEx(vehicleid, 0, lights, alarm, doors, bonnet, boot, objective);
-                SetVehicleVelocity(vehicleid, 0.0, 0.0, 0.0);
+                // Zaustavljanje se izvrsi samo jednom. Timer vise ne zakucava velocity svakih 150 ms.
                 if(!VehicleHudBrokenNotice[vehicleid])
                 {
+                    if(engine != 0)
+                        SetVehicleParamsEx(vehicleid, 0, lights, alarm, doors, bonnet, boot, objective);
+                    SetVehicleVelocity(vehicleid, 0.0, 0.0, 0.0);
                     SendClientMessage(p, 0xFF7777FF, "[VOZILO]: Kvarovi su 5/5. Motor je stao; vozilo treba popraviti.");
                     VehicleHudBrokenNotice[vehicleid] = true;
                 }
+                VehicleHudStalled[vehicleid] = true;
+                VehicleHudNextStallAt[vehicleid] = 0;
             }
-            else
+            else if(damage == 4)
             {
                 VehicleHudBrokenNotice[vehicleid] = false;
-                if(damage > 0)
+                if(VehicleHudStalled[vehicleid])
+                {
+                    if(engine != 0)
+                        SetVehicleParamsEx(vehicleid, 0, lights, alarm, doors, bonnet, boot, objective);
+                }
+                else
                 {
                     new Float:vx, Float:vy, Float:vz;
                     GetVehicleVelocity(vehicleid, vx, vy, vz);
                     new Float:speed = floatsqroot(vx * vx + vy * vy + vz * vz) * 180.0;
-                    new Float:limit = 0.0, Float:factor = 1.0;
-                    switch(damage)
+                    if(engine == 1 || speed > 3.0)
                     {
-                        case 1: { limit = 170.0; factor = 0.998; }
-                        case 2: { limit = 140.0; factor = 0.994; }
-                        case 3: { limit = 110.0; factor = 0.990; }
-                        case 4: { limit = 70.0; factor = 0.980; }
-                    }
-                    if(speed > limit) factor = limit / speed;
-                    if(speed > 30.0 && factor < 1.0)
-                        SetVehicleVelocity(vehicleid, vx * factor, vy * factor, vz * factor);
-                }
-                if(damage == 4)
-                {
-                    new engine, lights, alarm, doors, bonnet, boot, objective;
-                    GetVehicleParamsEx(vehicleid, engine, lights, alarm, doors, bonnet, boot, objective);
-                    if(VehicleHudStalled[vehicleid])
-                    {
-                        if(engine != 0)
-                            SetVehicleParamsEx(vehicleid, 0, lights, alarm, doors, bonnet, boot, objective);
-                        SetVehicleVelocity(vehicleid, 0.0, 0.0, 0.0);
-                    }
-                    else
-                    {
-                        // Neki motori se mogu kretati i kada je native engine parametar 0.
-                        new Float:vx, Float:vy, Float:vz;
-                        GetVehicleVelocity(vehicleid, vx, vy, vz);
-                        new Float:speed = floatsqroot(vx * vx + vy * vy + vz * vz) * 180.0;
-                        if(engine == 1 || speed > 3.0)
+                        if(VehicleHudNextStallAt[vehicleid] == 0)
+                            VehicleHudNextStallAt[vehicleid] = gettime() + 15 + random(11);
+                        if(gettime() >= VehicleHudNextStallAt[vehicleid])
                         {
-                            if(VehicleHudNextStallAt[vehicleid] == 0)
-                                VehicleHudNextStallAt[vehicleid] = gettime() + 15 + random(11);
-                            if(gettime() >= VehicleHudNextStallAt[vehicleid])
-                            {
-                                SetVehicleParamsEx(vehicleid, 0, lights, alarm, doors, bonnet, boot, objective);
-                                VehicleHudStalled[vehicleid] = true;
-                                VehicleHudNextStallAt[vehicleid] = 0;
-                                SetVehicleVelocity(vehicleid, 0.0, 0.0, 0.0);
-                                SendClientMessage(p, 0xFF7777FF, "[VOZILO]: Motor se ugasio zbog kvarova (4/5). Pokusajte /engine.");
-                            }
+                            SetVehicleParamsEx(vehicleid, 0, lights, alarm, doors, bonnet, boot, objective);
+                            VehicleHudStalled[vehicleid] = true;
+                            VehicleHudNextStallAt[vehicleid] = 0;
+                            SetVehicleVelocity(vehicleid, 0.0, 0.0, 0.0);
+                            SendClientMessage(p, 0xFF7777FF, "[VOZILO]: Motor se ugasio zbog kvarova (4/5). Pokusajte /engine.");
                         }
                     }
                 }
-                else
-                {
-                    VehicleHudNextStallAt[vehicleid] = 0;
-                    VehicleHudStalled[vehicleid] = false;
-                }
             }
+            else
+            {
+                // Kod 0-3 kvarova skripta samo prikazuje stanje i ne dira GTA fiziku vozila.
+                VehicleHudBrokenNotice[vehicleid] = false;
+                VehicleHudStalled[vehicleid] = false;
+                VehicleHudNextStallAt[vehicleid] = 0;
+            }
+            VehicleHudLastDamage[vehicleid] = damage;
         }
+
         if(VoziloHudShown[p]) VehicleHudUpdateSpeed(p, vehicleid);
     }
     return 1;
@@ -7842,7 +8106,7 @@ stock VehicleHudInitData(vehicleid)
     if(!VehicleHudInitialized[vehicleid])
     {
         VehicleHudInitialized[vehicleid] = true;
-        VehicleHudFuel[vehicleid] = VehicleHudNoFuel(GetVehicleModel(vehicleid)) ? 0.0 : 250.0;
+        VehicleHudFuel[vehicleid] = VehicleHudFuelCapacity(GetVehicleModel(vehicleid));
         VehicleHudKm[vehicleid] = 0.0;
         VehicleHudLoadKm(vehicleid);
         VehicleHudLastPosValid[vehicleid] = false;
@@ -7857,6 +8121,7 @@ stock VehicleHudStopForNoFuel(vehicleid)
     new engine, lights, alarm, doors, bonnet, boot, objective;
     GetVehicleParamsEx(vehicleid, engine, lights, alarm, doors, bonnet, boot, objective);
     SetVehicleParamsEx(vehicleid, 0, lights, alarm, doors, bonnet, boot, objective);
+    SetVehicleVelocity(vehicleid, 0.0, 0.0, 0.0);
     VehicleHudOutOfFuel[vehicleid] = true;
     for(new p = 0; p < MAX_PLAYERS; p++)
         if(IsPlayerConnected(p) && IsPlayerInVehicle(p, vehicleid))
@@ -7867,12 +8132,12 @@ stock VehicleHudStopForNoFuel(vehicleid)
 stock VehicleHudHide(playerid)
 {
     if(!VoziloHudShown[playerid]) return 0;
-    for(new i = 41; i <= 60; i++)
+    for(new i = 41; i <= 62; i++)
     {
-        if(i == 46 || i == 47 || i == 53 || i == 54 || i == 55 || i == 56 || i == 58 || i == 60) continue;
+        if(i == 46 || i == 48 || i == 54 || i == 55 || i == 57 || i == 58 || i == 59 || i == 60 || i == 62) continue;
         TextDrawHideForPlayer(playerid, TD_DTD[i]);
     }
-    for(new i = 0; i < 8; i++) PlayerTextDrawHide(playerid, TD_Vozilo[playerid][i]);
+    for(new i = 0; i < 12; i++) PlayerTextDrawHide(playerid, TD_Vozilo[playerid][i]);
     VoziloHudShown[playerid] = false;
     VehicleHudLastSpeed[playerid] = -1;
     return 1;
@@ -7881,12 +8146,21 @@ stock VehicleHudHide(playerid)
 stock VehicleHudShow(playerid)
 {
     if(VoziloHudShown[playerid]) return 0;
-    for(new i = 41; i <= 60; i++)
+    for(new i = 41; i <= 62; i++)
     {
-        if(i == 46 || i == 47 || i == 53 || i == 54 || i == 55 || i == 56 || i == 58 || i == 60) continue;
+        if(i == 46 || i == 48 || i == 54 || i == 55 || i == 57 || i == 58 || i == 59 || i == 60 || i == 62) continue;
         TextDrawShowForPlayer(playerid, TD_DTD[i]);
     }
-    for(new i = 0; i < 8; i++) PlayerTextDrawShow(playerid, TD_Vozilo[playerid][i]);
+    new model = GetVehicleModel(GetPlayerVehicleID(playerid));
+    for(new i = 0; i < 12; i++)
+    {
+        if(VehicleHudIsTruck(model))
+        {
+            if(i == 2 || i == 6 || i == 8) continue;
+        }
+        else if(i == 9 || i == 10 || i == 11) continue;
+        PlayerTextDrawShow(playerid, TD_Vozilo[playerid][i]);
+    }
     VoziloHudShown[playerid] = true;
     VehicleHudLastSpeed[playerid] = -1;
     return 1;
@@ -7896,21 +8170,48 @@ stock VehicleHudUpdatePlayer(playerid, vehicleid)
 {
     new model = GetVehicleModel(vehicleid);
     if(model < 400 || model > 611) return VehicleHudHide(playerid);
-    new name[32], label[64], fuelType[16];
+    new name[32], label[64], fuelType[16], Float:fuelCapacity = VehicleHudFuelCapacity(model);
+    if(VehicleHudFuel[vehicleid] > fuelCapacity) VehicleHudFuel[vehicleid] = fuelCapacity;
     format(name, sizeof(name), "%s", VehicleHudModelNames[model - 400]);
     PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][0], name);
     VehicleHudUpdateSpeed(playerid, vehicleid);
+    if(AdminSpawnedVehicle[vehicleid])
+    {
+        VehicleHudOutOfFuel[vehicleid] = false;
+        PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][2], "N/A");
+        PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][9], "N/A");
+        PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][3], "N/A");
+        PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][4], "N/A");
+        PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][5], "N/A");
+        PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][6], "");
+        PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][11], "");
+        PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][7], "");
+        PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][8], "");
+        PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][10], "");
+        VehicleHudShow(playerid);
+        TextDrawHideForPlayer(playerid, TD_DTD[61]);
+        return 1;
+    }
+    PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][8], "/");
+    PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][10], "/");
+    TextDrawShowForPlayer(playerid, TD_DTD[61]);
     format(label, sizeof(label), "%.1f", VehicleHudFuel[vehicleid]);
     PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][2], label);
+    PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][9], label);
     VehicleHudFuelType(model, fuelType, sizeof(fuelType));
     PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][3], fuelType);
     format(label, sizeof(label), "%d", floatround(VehicleHudKm[vehicleid], floatround_floor));
     PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][4], label);
     format(label, sizeof(label), "%d", VehicleHudDamageLevel(vehicleid));
     PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][5], label);
-    if(VehicleHudNoFuel(model)) PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][6], "0.0");
-    else PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][6], "250.0");
+    format(label, sizeof(label), "%.1f", fuelCapacity);
+    PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][6], label);
+    PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][11], label);
     PlayerTextDrawSetString(playerid, TD_Vozilo[playerid][7], "5");
+    new bool:truckLayout = VehicleHudIsTruck(model) != 0;
+    if(VoziloHudShown[playerid] && VehicleHudTruckLayout[playerid] != truckLayout)
+        VehicleHudHide(playerid);
+    VehicleHudTruckLayout[playerid] = truckLayout;
     VehicleHudShow(playerid);
     return 1;
 }
@@ -7933,6 +8234,14 @@ public UpdateVehicleHud()
             VehicleHudHide(p);
             continue;
         }
+        if(AdminSpawnedVehicle[vehicleid])
+        {
+            VehicleHudOutOfFuel[vehicleid] = false;
+            VehicleHudLastPosValid[vehicleid] = false;
+            VehicleHudUpdatePlayer(p, vehicleid);
+            continue;
+        }
+        if(VehicleHudFuel[vehicleid] > 0.0) VehicleHudOutOfFuel[vehicleid] = false;
         if(playerState == PLAYER_STATE_DRIVER)
         {
             new Float:x, Float:y, Float:z;
@@ -7969,7 +8278,6 @@ public UpdateVehicleHud()
             VehicleHudLastY[vehicleid] = y;
             VehicleHudLastZ[vehicleid] = z;
             VehicleHudLastPosValid[vehicleid] = true;
-            if(VehicleHudOutOfFuel[vehicleid]) SetVehicleVelocity(vehicleid, 0.0, 0.0, 0.0);
         }
         VehicleHudUpdatePlayer(p, vehicleid);
     }
@@ -7983,6 +8291,8 @@ CMD:fill(playerid, params[])
     new vehicleid = GetPlayerVehicleID(playerid);
     if(!VehicleHudInitData(vehicleid))
         return SendClientMessage(playerid, 0xFF7777FF, "[GORIVO]: Vozilo nije dostupno.");
+    if(AdminSpawnedVehicle[vehicleid])
+        return SendClientMessage(playerid, 0x33CCFFFF, "[GORIVO]: Privremeno /veh vozilo ima beskonacno gorivo.");
     if(VehicleHudNoFuel(GetVehicleModel(vehicleid)))
         return SendClientMessage(playerid, 0xFF7777FF, "[GORIVO]: Ovo vozilo ne koristi gorivo.");
     new Float:vx, Float:vy, Float:vz;
@@ -7993,7 +8303,8 @@ CMD:fill(playerid, params[])
     GetVehicleParamsEx(vehicleid, engine, lights, alarm, doors, bonnet, boot, objective);
     if(engine == 1)
         return SendClientMessage(playerid, 0xFF7777FF, "[GORIVO]: Prvo ugasite motor komandom /engine.");
-    new Float:missing = 250.0 - VehicleHudFuel[vehicleid];
+    new Float:fuelCapacity = VehicleHudFuelCapacity(GetVehicleModel(vehicleid));
+    new Float:missing = fuelCapacity - VehicleHudFuel[vehicleid];
     if(missing < 0.1)
         return SendClientMessage(playerid, 0xFF7777FF, "[GORIVO]: Rezervoar je vec pun.");
     new price = floatround(missing * 10.0, floatround_ceil);
@@ -8001,7 +8312,7 @@ CMD:fill(playerid, params[])
         return SendClientMessage(playerid, 0xFF7777FF, "[GORIVO]: Nemate dovoljno RSD za pun rezervoar.");
     GivePlayerMoney(playerid, -price);
     PlayerInfo[playerid][pNovac] = GetPlayerMoney(playerid);
-    VehicleHudFuel[vehicleid] = 250.0;
+    VehicleHudFuel[vehicleid] = fuelCapacity;
     VehicleHudOutOfFuel[vehicleid] = false;
     new name[MAX_PLAYER_NAME], file[128], message[128];
     GetPlayerName(playerid, name, sizeof(name));
@@ -8021,7 +8332,7 @@ public OnVehicleSpawn(vehicleid)
 {
     if(vehicleid > 0 && vehicleid < MAX_VEHICLES)
     {
-        VehicleHudFuel[vehicleid] = VehicleHudNoFuel(GetVehicleModel(vehicleid)) ? 0.0 : 250.0;
+        VehicleHudFuel[vehicleid] = VehicleHudFuelCapacity(GetVehicleModel(vehicleid));
         VehicleHudLastPosValid[vehicleid] = false;
         VehicleHudOutOfFuel[vehicleid] = false;
         if(!VehicleHudInitialized[vehicleid]) VehicleHudLoadKm(vehicleid);
@@ -8030,6 +8341,7 @@ public OnVehicleSpawn(vehicleid)
         VehicleHudStalled[vehicleid] = false;
         VehicleHudNextStartTry[vehicleid] = 0;
         VehicleHudNextStallAt[vehicleid] = 0;
+        VehicleHudLastDamage[vehicleid] = 0;
     }
     return 1;
 }
@@ -8258,11 +8570,49 @@ CMD:goto(playerid, params[])
 
     new Float:x, Float:y, Float:z;
     GetPlayerPos(destination, x, y, z);
-    if(IsPlayerInAnyVehicle(targetid)) RemovePlayerFromVehicle(targetid);
-    SetPlayerInterior(targetid, GetPlayerInterior(destination));
-    SetPlayerVirtualWorld(targetid, GetPlayerVirtualWorld(destination));
-    SetPlayerPos(targetid, x + 1.5, y, z + 0.3);
-    SetCameraBehindPlayer(targetid);
+    new interior = GetPlayerInterior(destination);
+    new world = GetPlayerVirtualWorld(destination);
+    if(GetPlayerState(targetid) == PLAYER_STATE_DRIVER && IsPlayerInAnyVehicle(targetid))
+    {
+        new vehicleid = GetPlayerVehicleID(targetid);
+        if(vehicleid <= 0 || vehicleid >= MAX_VEHICLES || GetVehicleModel(vehicleid) == 0)
+            return SendClientMessage(playerid, 0xFF0000FF, "GRESKA: Vozilo igraca nije dostupno.");
+
+        // Vozac vodi svoje vozilo i sve putnike; sacuvaj sjedista prije promjene svijeta.
+        new occupants[MAX_PLAYERS], seats[MAX_PLAYERS], count = 0;
+        for(new p = 0; p < MAX_PLAYERS; p++)
+        {
+            if(!IsPlayerConnected(p) || !IsPlayerInVehicle(p, vehicleid)) continue;
+            occupants[count] = p;
+            seats[count] = GetPlayerVehicleSeat(p);
+            count++;
+        }
+        SetVehicleVirtualWorld(vehicleid, world);
+        LinkVehicleToInterior(vehicleid, interior);
+        for(new i = 0; i < count; i++)
+        {
+            SetPlayerInterior(occupants[i], interior);
+            SetPlayerVirtualWorld(occupants[i], world);
+        }
+        SetVehicleVelocity(vehicleid, 0.0, 0.0, 0.0);
+        SetVehiclePos(vehicleid, x + 3.0, y, z + 0.5);
+        for(new i = 0; i < count; i++)
+        {
+            if(!IsPlayerInVehicle(occupants[i], vehicleid))
+                PutPlayerInVehicle(occupants[i], vehicleid, seats[i]);
+            SetCameraBehindPlayer(occupants[i]);
+        }
+        VehicleHudLastPosValid[vehicleid] = false; // Teleport se ne racuna u kilometrazu.
+    }
+    else
+    {
+        // Suvozac i ostali putnici idu sami, bez premjestanja vozila i drugih igraca.
+        if(IsPlayerInAnyVehicle(targetid)) RemovePlayerFromVehicle(targetid);
+        SetPlayerInterior(targetid, interior);
+        SetPlayerVirtualWorld(targetid, world);
+        SetPlayerPos(targetid, x + 1.5, y, z + 0.3);
+        SetCameraBehindPlayer(targetid);
+    }
 
     new destName[MAX_PLAYER_NAME], targetName[MAX_PLAYER_NAME], message[128];
     GetPlayerName(destination, destName, sizeof(destName));
@@ -8344,7 +8694,7 @@ CMD:slap(playerid, params[])
     if(sscanf(params, "us[128]", targetid, razlog)) return SendClientMessage(playerid, 0xAFAFAFFF, "KORISTI: /slap [ID/DeoImena] [Razlog]");
 
     if(!IsPlayerConnected(targetid)) return SendClientMessage(playerid, 0xFF0000FF, "Taj igrac trenutno nije na serveru.");
-    // Admin moze koristiti /slap i na sebi.
+    if(targetid == playerid) return SendClientMessage(playerid, 0xFF0000FF, "Ne mozete koristiti /slap na sebi.");
 
     new targetName[MAX_PLAYER_NAME], adminName[MAX_PLAYER_NAME];
     GetPlayerName(targetid, targetName, sizeof(targetName));
@@ -8371,6 +8721,7 @@ CMD:slap(playerid, params[])
     format(javnaporuka, sizeof(javnaporuka), "Igrac %s je osamaren od strane AdminTeama. Razlog: %s", targetName, razlog);
     SendClientMessageToAll(0xFA8072FF, javnaporuka);
 
+    AddPlayerSavedStat(targetid, "AdminKazne", 1);
     return 1;
 }
 CMD:l(playerid, params[])
@@ -10215,7 +10566,9 @@ CMD:givemoney(playerid, params[]) // Dodane uglaste zagrade [] ako je params niz
         return SendClientMessage(playerid, 0xFF0000FF, "GRESKA: Taj igrac nije na serveru!");
     }
     if(money <= 0) return SendClientMessage(playerid, 0xFF0000FF, "GRESKA: Kolicina novca mora biti veca od nule!");
-    if(money > 2147483647 - GetPlayerMoney(targetid)) return SendClientMessage(playerid, 0xFF0000FF, "GRESKA: Prevelika kolicina novca!");
+    new currentMoney = GetPlayerMoney(targetid);
+    if(currentMoney > 0 && money > 2147483647 - currentMoney)
+        return SendClientMessage(playerid, 0xFF0000FF, "GRESKA: Prevelika kolicina novca!");
 
     new string[128], targetname[MAX_PLAYER_NAME], targetfile[128];
     GetPlayerName(targetid, targetname, sizeof(targetname));
@@ -10280,7 +10633,6 @@ CMD:rac(playerid, params)
     SetTimer("RespawnUnusedVehiclesTimer", 30000, false);
     return 1;
 }
-new bool:AdminSpawnedVehicle[MAX_VEHICLES];
 
 stock VehicleCommandAdmin(playerid)
 {
@@ -10566,14 +10918,48 @@ public RestartServerTimer()
 forward RespawnUnusedVehiclesTimer();
 public RespawnUnusedVehiclesTimer()
 {
-    for(new i = 0; i < MAX_VEHICLES; i++)
+    new deletedTemp = 0, returnedRent = 0, returnedParked = 0;
+    for(new vehicleid = 1; vehicleid < MAX_VEHICLES; vehicleid++)
     {
-        if(!IsVehicleOccupied(i) && !RentVehicleOwner[i])
+        if(GetVehicleModel(vehicleid) == 0 || IsVehicleOccupied(vehicleid)) continue;
+
+        if(AdminSpawnedVehicle[vehicleid])
         {
-            SetVehicleToRespawn(i);
+            AdminSpawnedVehicle[vehicleid] = false;
+            VehicleHudInitialized[vehicleid] = false;
+            VehicleHudOutOfFuel[vehicleid] = false;
+            VehicleHudLastPosValid[vehicleid] = false;
+            VehicleHudBrokenNotice[vehicleid] = false;
+            VehicleHudStalled[vehicleid] = false;
+            VehicleHudFuel[vehicleid] = 0.0;
+            VehicleHudKm[vehicleid] = 0.0;
+            VehicleHudLastDamage[vehicleid] = 0;
+            DestroyVehicle(vehicleid);
+            deletedTemp++;
+            continue;
         }
+
+        if(IsRentVehicle(vehicleid))
+        {
+            if(RentVehicleOwner[vehicleid])
+            {
+                new owner = RentVehicleOwner[vehicleid] - 1;
+                if(owner >= 0 && owner < MAX_PLAYERS && IsPlayerConnected(owner))
+                    StopPlayerRent(owner, false);
+                else RentVehicleOwner[vehicleid] = 0;
+            }
+            SetVehicleToRespawn(vehicleid);
+            returnedRent++;
+            continue;
+        }
+
+        SetVehicleToRespawn(vehicleid);
+        returnedParked++;
     }
-    SendClientMessageToAll(0x00FF00FF, "[SERVER]: Sva neiskorišcena vozila su uspešno respawnovana!");
+
+    new message[144];
+    format(message, sizeof(message), "[RAC]: Obrisano /veh: %d | Vraceno rent: %d | Vraceno parkirano: %d.", deletedTemp, returnedRent, returnedParked);
+    SendClientMessageToAll(0x00FF00FF, message);
     return 1;
 }
 // --- /CALL 666 ---
@@ -11412,6 +11798,18 @@ stock SendBigEarLog(const string[])
 }
 public OnPlayerText(playerid, text[])
 {
+    if(JuniorMutedUntil[playerid] > gettime())
+    {
+        new muteMsg[96];
+        format(muteMsg, sizeof(muteMsg), "[MUTE]: Ne mozete pisati jos %d sekundi.", JuniorMutedUntil[playerid] - gettime());
+        SendClientMessage(playerid, 0xFF7777FF, muteMsg);
+        return 0;
+    }
+    if(JuniorGlobalChatLocked && !HasAdminCommandAccess(playerid))
+    {
+        SendClientMessage(playerid, 0xFF7777FF, "[CHAT]: Globalni chat je trenutno zakljucan.");
+        return 0;
+    }
     // 1. BIGEAR (Spy sistem) - ostaje globalan jer ti treba da cuješ sve
     new ime[MAX_PLAYER_NAME];
     GetPlayerName(playerid, ime, sizeof(ime));
@@ -11515,6 +11913,16 @@ CMD:veh(playerid, params[])
     if(vehicleid <= 0 || vehicleid >= MAX_VEHICLES)
         return SendClientMessage(playerid, 0xFF0000FF, "[VOZILO]: Stvaranje vozila nije uspjelo.");
     AdminSpawnedVehicle[vehicleid] = true;
+    // Novi /veh moze dobiti ID ranije unistenog vozila; ocisti sve staro stanje tog ID-a.
+    VehicleHudInitialized[vehicleid] = false;
+    VehicleHudOutOfFuel[vehicleid] = false;
+    VehicleHudLastPosValid[vehicleid] = false;
+    VehicleHudBrokenNotice[vehicleid] = false;
+    VehicleHudStalled[vehicleid] = false;
+    VehicleHudNextStartTry[vehicleid] = 0;
+    VehicleHudNextStallAt[vehicleid] = 0;
+    VehicleHudLastDamage[vehicleid] = 0;
+    VehicleHudInitData(vehicleid);
     PutPlayerInVehicle(playerid, vehicleid, 0);
 
     SendClientMessage(playerid, 0x00FF00FF, "[SERVER]: Uspešno ste stvorili vozilo.");
@@ -11768,12 +12176,11 @@ stock ApplyPendingDeathPenalty(playerid, bool:notify)
 {
     if(PendingDeathFine[playerid] <= 0) return 0;
     new cash = GetPlayerMoney(playerid);
-    if(cash < 0) cash = 0;
     new fine = PendingDeathFine[playerid];
-    if(fine > cash) fine = cash;
+    new newBalance = cash - fine;
     ResetPlayerMoney(playerid);
-    GivePlayerMoney(playerid, cash - fine);
-    PlayerInfo[playerid][pNovac] = cash - fine;
+    GivePlayerMoney(playerid, newBalance);
+    PlayerInfo[playerid][pNovac] = newBalance;
     new name[MAX_PLAYER_NAME], file[128];
     GetPlayerName(playerid, name, sizeof(name));
     format(file, sizeof(file), "Korisnici/%s.ini", name);
@@ -11787,7 +12194,7 @@ stock ApplyPendingDeathPenalty(playerid, bool:notify)
     if(notify)
     {
         new message[128];
-        format(message, sizeof(message), "[SMRT]: Izgubili ste %d$ zbog %d Wanted Levela. Dosije je obrisan.", fine, PendingDeathWanted[playerid]);
+        format(message, sizeof(message), "[SMRT]: Naplaceno vam je %d RSD za smrt/lijecenje i %d Wanted Levela. Dosije je obrisan.", fine, PendingDeathWanted[playerid]);
         SendClientMessage(playerid, 0xFF7777FF, message);
     }
     PendingDeathFine[playerid] = 0;
@@ -11816,6 +12223,7 @@ public FinishSpawnWantedReset(playerid, serial)
 
 public OnPlayerDeath(playerid, killerid, reason)
 {
+    #pragma unused reason
     JetpackDropGuardUntil[playerid] = 0;
     new wanted = WantedPoints[playerid];
     if(GetPlayerWantedLevel(playerid) > wanted) wanted = GetPlayerWantedLevel(playerid);
@@ -11823,7 +12231,7 @@ public OnPlayerDeath(playerid, killerid, reason)
     format(WantedReason[playerid], 64, "Nema");
     PendingDeathWanted[playerid] = wanted;
     PendingDeathFine[playerid] = wanted * 1500;
-    // Ne salji wanted/textdraw RPC dok je igrac u stanju smrti.
+
     new name[MAX_PLAYER_NAME], file[128];
     GetPlayerName(playerid, name, sizeof(name));
     format(file, sizeof(file), "Korisnici/%s.ini", name);
@@ -11831,18 +12239,28 @@ public OnPlayerDeath(playerid, killerid, reason)
     {
         DOF2_SetInt(file, "DosijeWanted", 0);
         DOF2_SetString(file, "DosijeRazlog", "Nema");
+        DOF2_SetInt(file, "DosijeSmrti", DOF2_GetInt(file, "DosijeSmrti") + 1);
+        new insurance = DOF2_GetInt(file, "Osiguranja");
+        if(insurance > 0)
+        {
+            DOF2_SetInt(file, "Osiguranja", insurance - 1);
+            SendClientMessage(playerid, 0x66CCFFFF, "[OSIGURANJE]: Iskoristeno je 1 osiguranje za bolnicko lijecenje.");
+        }
+        else PendingDeathFine[playerid] += MEDICAL_TREATMENT_PRICE;
         DOF2_SaveFile();
     }
+    if(killerid != INVALID_PLAYER_ID && killerid != playerid && IsPlayerConnected(killerid))
+        AddPlayerSavedStat(killerid, "DosijeUbistva", 1);
+
     if(BankHackPlayer == playerid) BankAbortHack();
     if(BankRobber == playerid) BankAbortRobbery(true);
     if(BankMoneyBag[playerid]) RemovePlayerAttachedObject(playerid, 9);
     BankMoneyBag[playerid] = false;
     ScriptJetpack[playerid] = false;
     IsHealing[playerid] = true;
-    PlayerCurrentSkin[playerid] = GetPlayerSkin(playerid); // Pamtimo skin prije smrti
+    PlayerCurrentSkin[playerid] = GetPlayerSkin(playerid);
     if(PlayerCurrentSkin[playerid] < 0 || PlayerCurrentSkin[playerid] > 311 || PlayerCurrentSkin[playerid] == 74)
         PlayerCurrentSkin[playerid] = 26;
-    // Server spawna igraca direktno u bolnici sa istim skinom.
     SetSpawnInfo(playerid, 0, PlayerCurrentSkin[playerid], -20.6776, 1481.3562, -3.3132, 179.0601, 0, 0, 0, 0, 0, 0);
     return 1;
 }
@@ -11856,38 +12274,23 @@ public ZavrsiLecenje(playerid)
         // Vraca ga na njegov regularni spawn na osnovu sacuvane organizacije
         if(PlayerOrg[playerid] == 1)
         {
-            SetPlayerPos(playerid, 230.6200, 75.2964, 1005.0391);
-            SetPlayerFacingAngle(playerid, 270.3857);
-            SetPlayerInterior(playerid, 6);
-            SetPlayerVirtualWorld(playerid, 0);
+            SafeTeleportPlayer(playerid, 230.6200, 75.2964, 1005.0391, 6, 0, 270.3857);
         }
         else if(PlayerOrg[playerid] == 4)
         {
-            SetPlayerPos(playerid, 1754.1577, -1903.0061, 13.5634);
-            SetPlayerFacingAngle(playerid, 0.0);
-            SetPlayerInterior(playerid, 0);
-            SetPlayerVirtualWorld(playerid, 0);
+            SafeTeleportPlayer(playerid, 1754.1577, -1903.0061, 13.5634, 0, 0, 0.0);
         }
         else if(PlayerOrg[playerid] == 5)
         {
-            SetPlayerPos(playerid, -13.7780, 1465.4548, -3.2142);
-            SetPlayerFacingAngle(playerid, 3.1334);
-            SetPlayerInterior(playerid, 0);
-            SetPlayerVirtualWorld(playerid, 0);
+            SafeTeleportPlayer(playerid, -13.7780, 1465.4548, -3.2142, 0, 0, 3.1334);
         }
         else if(PlayerOrg[playerid] == 7)
         {
-            SetPlayerPos(playerid, 1072.9264, -878.3057, 43.3932);
-            SetPlayerFacingAngle(playerid, 0.0);
-            SetPlayerInterior(playerid, 0);
-            SetPlayerVirtualWorld(playerid, 0);
+            SafeTeleportPlayer(playerid, 1072.9264, -878.3057, 43.3932, 0, 0, 0.0);
         }
         else
         {
-            SetPlayerPos(playerid, 1685.8652, -2331.2102, 13.5469);
-            SetPlayerFacingAngle(playerid, 90.2917);
-            SetPlayerInterior(playerid, 0);
-            SetPlayerVirtualWorld(playerid, 0);
+            SafeTeleportPlayer(playerid, 1685.8652, -2331.2102, 13.5469, 0, 0, 90.2917);
         }
 
         SendClientMessage(playerid, 0x00FF00FF, "[BOLNICA]: Završili ste lecenje i vraceni ste na svoju spawn lokaciju.");
@@ -12062,40 +12465,624 @@ CMD:stablo(playerid, params[]) {
 #define MAX_TEMP_NAME_RECORDS 500
 #define TEMP_NAME_BACKUP_DIR "BackupImena"
 
-stock ShowAH(playerid)
+stock ShowAllCommands(playerid)
 {
-    new text[2048];
-    strcat(text, "/mp3 /stats /help /dajadmin /setcodeadmin\n", sizeof(text));
-    strcat(text, "/admini /adminduty /dajhelpera /hduty /helperi\n", sizeof(text));
-    strcat(text, "/setcodehelper /napravikucu /izbrisikucu /editujkucu /jetpack\n", sizeof(text));
-    strcat(text, "/buyhouse /gotohouse /sellhouse /lockhouse /unlockhouse\n", sizeof(text));
-    strcat(text, "/napravimarket /editujmarket /obrisimarket /buybizz /sellbizz\n", sizeof(text));
-    strcat(text, "/gotomarket /kick /ban /setlevel /unbanip\n", sizeof(text));
-    strcat(text, "/gotopos /kupitelefon /kupibrojtel /kupislusalice /lideri\n", sizeof(text));
-    strcat(text, "/inventory /buyinventory /kupi /smsad /napravioglase\n", sizeof(text));
-    strcat(text, "/editujoglase /obrisioglase /napravizlataru /editujzlataru /obrisizlataru\n", sizeof(text));
-    strcat(text, "/kupizlato /prodajzlato /kupisat /time /setleader\n", sizeof(text));
-    strcat(text, "/slap /goto /kill /setskin /l /gethere /b /me\n", sizeof(text));
-    strcat(text, "/do /member /invite /uninvite /orghelp\n", sizeof(text));
-    strcat(text, "/kazniclana /napravitrafiku /editujtrafiku /obrisitrafiku /kreirajobjekat\n", sizeof(text));
-    strcat(text, "/editujobjekt /obrisiobjekat /trafika /kreirajlabeltrafika /obrisilabeltrafika\n", sizeof(text));
-    strcat(text, "/kreirajlabel /obrisilabel /givemoney /restart /rac\n", sizeof(text));
-    strcat(text, "/call /acceptfaren /duty /f /d\n", sizeof(text));
-    strcat(text, "/ooc /giverank /preuzmivozilo /bigear /veh\n", sizeof(text));
-    strcat(text, "/posao /otkaz /jobhelp /engine /dovezipostu\n", sizeof(text));
-    strcat(text, "/prekiniposao /sethealth /setarmour /uninviteme /stablo\n", sizeof(text));
-    strcat(text, "/sethour /setminute /ah /name /setadmincode\n", sizeof(text));
-    strcat(text, "/rtc /artc /fix\n", sizeof(text));
-    strcat(text, "/artcveh /afixveh /unrent /rentvehiclehelp\n", sizeof(text));
-    strcat(text, "/gotomarker /iskljucilasere /givegun /dajdinamit /resetbanku /postavidinamit /robbank\n", sizeof(text));
+    if(!HasAdminCommandAccess(playerid))
+        return SendClientMessage(playerid, 0xFF0000FF, "GRESKA: Samo administracija moze koristiti /ahelp.");
+    new text[4096];
+    strcat(text, "/mp3 /stats /help /pravila /dajadmin /setcodeadmin\n", sizeof(text));
+    strcat(text, "/admini /adminduty /dajhelpera /hduty /helperi /setcodehelper\n", sizeof(text));
+    strcat(text, "/napravikucu /izbrisikucu /editujkucu /jetpack /buyhouse /gotohouse /sellhouse\n", sizeof(text));
+    strcat(text, "/lockhouse /unlockhouse /napravimarket /editujmarket /obrisimarket /buybizz /sellbizz\n", sizeof(text));
+    strcat(text, "/gotomarket /kick /ban /setlevel /unbanip /gotopos /gotomarker\n", sizeof(text));
+    strcat(text, "/kupitelefon /kupibrojtel /kupislusalice /lideri /inventory /buyinventory /kupi /smsad\n", sizeof(text));
+    strcat(text, "/napravioglase /editujoglase /obrisioglase /napravizlataru /editujzlataru /obrisizlataru\n", sizeof(text));
+    strcat(text, "/kupizlato /prodajzlato /kupisat /time /setleader /slap /goto /kill /setskin\n", sizeof(text));
+    strcat(text, "/l /gethere /b /me /do /member /invite /uninvite /orghelp /kazniclana\n", sizeof(text));
+    strcat(text, "/napravitrafiku /editujtrafiku /obrisitrafiku /kreirajobjekat /editujobjekt /obrisiobjekat\n", sizeof(text));
+    strcat(text, "/trafika /kreirajlabeltrafika /obrisilabeltrafika /kreirajlabel /obrisilabel\n", sizeof(text));
+    strcat(text, "/givemoney /givegun /restart /rac /rtc /artc /fix /artcveh /afixveh\n", sizeof(text));
+    strcat(text, "/call /acceptfaren /duty /f /d /ooc /giverank /preuzmivozilo /bigear /veh\n", sizeof(text));
+    strcat(text, "/posao /otkaz /jobhelp /engine /dovezipostu /prekiniposao /sethealth /setarmour\n", sizeof(text));
+    strcat(text, "/uninviteme /stablo /sethour /setminute /name /setadmincode /unrent /rentvehiclehelp\n", sizeof(text));
+    strcat(text, "/iskljucilasere /dajdinamit /resetbanku /postavidinamit /robbank\n", sizeof(text));
+    strcat(text, "/happyhour /setupozorenja /setrprank /dajosiguranje /dajdpoen\n", sizeof(text));
+    strcat(text, "\n{33CCFF}Junior Admin komande:{FFFFFF}\n", sizeof(text));
+    strcat(text, "/jailed /checkdm /checkinv /check /checklic /aodg /pm /lockgchat /he /checkevent /gotojetn\n", sizeof(text));
+    strcat(text, "/setcarhp /setage /askin /freeze /unfreeze /sethp /setarmor /getcar /auntie /awl /gotomc\n", sizeof(text));
+    strcat(text, "/setjob /apark /checkw /flip /cc /ajail /mute /unmute /masked /akick /napravipoklon /rpslap\n", sizeof(text));
+    strcat(text, "/spec /specoff /g /h /a /o /or /pr /startevent /stopevent /acontracts\n", sizeof(text));
+    strcat(text, "/mutegchat /mutead /muteaskq /mutereport /gotolist /gotoautosk /gotoplanina\n", sizeof(text));
+    strcat(text, "/gotoaerodrom /gotojob /gotopijaca /gotoboks /unmuteaskq /unmutereport /unmutead /unmutegchat\n", sizeof(text));
     ShowPlayerDialog(playerid, DIALOG_AH, DIALOG_STYLE_MSGBOX, "Sve komande", text, "Zatvori", "");
     return 1;
 }
 
-CMD:ah(playerid, params[])
+stock ShowAH(playerid)
 {
-    return ShowAH(playerid);
+    if(!HasAdminCommandAccess(playerid))
+        return SendClientMessage(playerid, 0xFF0000FF, "GRESKA: Samo administracija moze koristiti /ah.");
+    new text[4096];
+    strcat(text, "{33CCFF}==================== {FFFFFF}Admin Help {33CCFF}====================\n\n", sizeof(text));
+    strcat(text, "{33CCFF}Duznost {FFFFFF}| /adminduty\n", sizeof(text));
+    strcat(text, "{33CCFF}Junior Admin {FFFFFF}| /name, /jailed, /checkdm, /checkinv, /check, /checklic, /aodg, /pm, /lockgchat, /he, /checkevent, /gotojetn\n", sizeof(text));
+    strcat(text, "{33CCFF}Junior Admin {FFFFFF}| /setcarhp, /setage, /setskin, /askin, /gethere, /freeze, /unfreeze, /sethp, /setarmor, /getcar, /auntie, /awl, /gotomc\n", sizeof(text));
+    strcat(text, "{33CCFF}Junior Admin {FFFFFF}| /setjob, /apark, /checkw, /flip, /kill, /cc, /ajail, /mute, /unmute, /masked, /kick, /akick, /slap, /napravipoklon, /rpslap\n", sizeof(text));
+    strcat(text, "{33CCFF}Junior Admin {FFFFFF}| /spec, /specoff, /g, /h, /a, /o, /or, /pr, /rtc, /admini, /startevent, /stopevent, /jetpack, /acontracts\n", sizeof(text));
+    strcat(text, "{33CCFF}Junior Admin {FFFFFF}| /mutegchat, /mutead, /muteaskq, /mutereport, /goto, /gotolist, /gotoautosk, /gotoplanina, /gotoaerodrom, /gotojob, /gotopijaca, /gotoboks\n", sizeof(text));
+    strcat(text, "{33CCFF}Junior Admin {FFFFFF}| /unmuteaskq, /unmutereport, /unmutead, /unmutegchat\n\n", sizeof(text));
+    strcat(text, "{FFD700}Posebne komande {FFFFFF}| /happyhour, /setupozorenja, /setrprank, /dajosiguranje, /dajdpoen\n\n", sizeof(text));
+    strcat(text, "{33CCFF}Admin {FFFFFF}| Komande ce biti dodane nakon testiranja Junior Admin sistema.\n", sizeof(text));
+    strcat(text, "{33CCFF}Senior Admin {FFFFFF}| Komande ce biti dodane kasnije.\n", sizeof(text));
+    ShowPlayerDialog(playerid, DIALOG_ADMIN_HELP, DIALOG_STYLE_MSGBOX, "Balkan Revolution RolePlay Admin Help", text, "OK", "");
+    return 1;
 }
+
+CMD:ah(playerid, params[]) return ShowAH(playerid);
+CMD:ahelp(playerid, params[]) return ShowAllCommands(playerid);
+
+stock HasSpecialCommandAccess(playerid)
+{
+    if(IsPlayerAdmin(playerid)) return 1;
+    new file[128];
+    return GetPlayerAccountPath(playerid, file, sizeof(file)) && DOF2_GetInt(file, "Admin") >= 9;
+}
+
+stock SetSpecialPlayerValue(playerid, targetid, key[], value, label[])
+{
+    if(!HasSpecialCommandAccess(playerid))
+        return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Ova posebna komanda je trenutno dostupna samo Vlasniku.");
+    if(!IsPlayerConnected(targetid))
+        return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Igrac nije online.");
+    new file[128], message[144], targetName[MAX_PLAYER_NAME];
+    if(!GetPlayerAccountPath(targetid, file, sizeof(file)))
+        return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Korisnicki fajl igraca nije pronadjen.");
+    DOF2_SetInt(file, key, value);
+    DOF2_SaveFile();
+    GetPlayerName(targetid, targetName, sizeof(targetName));
+    format(message, sizeof(message), "[POSEBNO]: %s igraca %s postavljeno je na %d.", label, targetName, value);
+    SendClientMessage(playerid, 0xFFD700FF, message);
+    format(message, sizeof(message), "[POSEBNO]: Vas %s je postavljen na %d.", label, value);
+    SendClientMessage(targetid, 0xFFD700FF, message);
+    return 1;
+}
+
+CMD:happyhour(playerid, params[])
+{
+    #pragma unused params
+    if(!HasSpecialCommandAccess(playerid))
+        return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: /happyhour je trenutno dostupan samo Vlasniku.");
+
+    new message[128];
+    if(HappyHourMultiplier == 2)
+    {
+        HappyHourMultiplier = 1;
+        format(message, sizeof(message), "[HAPPY HOUR]: Happy Hour je zavrsen. Respekt se ponovo dobija 1x.");
+    }
+    else
+    {
+        HappyHourMultiplier = 2;
+        format(message, sizeof(message), "[HAPPY HOUR]: Happy Hour je ukljucen. Respekt se sada dobija 2x.");
+    }
+
+    if(!DOF2_FileExists(STATS_SETTINGS_FILE)) DOF2_CreateFile(STATS_SETTINGS_FILE);
+    DOF2_SetInt(STATS_SETTINGS_FILE, "HappyHourMultiplier", HappyHourMultiplier);
+    DOF2_SaveFile();
+    SendClientMessageToAll(0xFFD700FF, message);
+    return 1;
+}
+CMD:setupozorenja(playerid, params[])
+{
+    new targetid, amount;
+    if(sscanf(params, "ui", targetid, amount) || amount < 0 || amount > 3)
+        return SendClientMessage(playerid, -1, "Koristenje: /setupozorenja [ID/Ime] [0-3]");
+    return SetSpecialPlayerValue(playerid, targetid, "Upozorenja", amount, "broj upozorenja");
+}
+
+CMD:setrprank(playerid, params[])
+{
+    new targetid, rank;
+    if(sscanf(params, "ui", targetid, rank) || rank < 0 || rank > 100)
+        return SendClientMessage(playerid, -1, "Koristenje: /setrprank [ID/Ime] [0-100]");
+    return SetSpecialPlayerValue(playerid, targetid, "RolePlayRank", rank, "RolePlay rank");
+}
+
+CMD:dajosiguranje(playerid, params[])
+{
+    new targetid, amount;
+    if(sscanf(params, "ui", targetid, amount) || amount < 0 || amount > 1000)
+        return SendClientMessage(playerid, -1, "Koristenje: /dajosiguranje [ID/Ime] [Kolicina 0-1000]");
+    return SetSpecialPlayerValue(playerid, targetid, "Osiguranja", amount, "broj osiguranja");
+}
+
+CMD:dajdpoen(playerid, params[])
+{
+    if(!HasSpecialCommandAccess(playerid))
+        return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: /dajdpoen je trenutno dostupan samo Vlasniku.");
+    new targetid, amount;
+    if(sscanf(params, "ui", targetid, amount) || amount < 1 || amount > 1000000)
+        return SendClientMessage(playerid, -1, "Koristenje: /dajdpoen [ID/Ime] [Kolicina]");
+    if(!IsPlayerConnected(targetid))
+        return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Igrac nije online.");
+    new file[128], targetName[MAX_PLAYER_NAME], message[144];
+    if(!GetPlayerAccountPath(targetid, file, sizeof(file))) return 0;
+    new total = DOF2_GetInt(file, "DonatePoeni") + amount;
+    DOF2_SetInt(file, "DonatePoeni", total);
+    DOF2_SaveFile();
+    GetPlayerName(targetid, targetName, sizeof(targetName));
+    format(message, sizeof(message), "[DONATE]: Dali ste %d Donate Poena igracu %s. Sada ima %d.", amount, targetName, total);
+    SendClientMessage(playerid, 0xFFD700FF, message);
+    format(message, sizeof(message), "[DONATE]: Dobili ste %d Donate Poena. Sada imate %d.", amount, total);
+    SendClientMessage(targetid, 0xFFD700FF, message);
+    return 1;
+}
+
+stock JuniorAdminFile(playerid, file[], size)
+{
+    new name[MAX_PLAYER_NAME];
+    GetPlayerName(playerid, name, sizeof(name));
+    format(file, size, "Korisnici/%s.ini", name);
+    return DOF2_FileExists(file);
+}
+
+stock JuniorAdminMessage(const text[])
+{
+    for(new i = 0; i < MAX_PLAYERS; i++)
+        if(IsPlayerConnected(i) && HasAdminCommandAccess(i)) SendClientMessage(i, 0x33CCFFFF, text);
+    return 1;
+}
+
+stock JuniorTeleport(playerid, Float:x, Float:y, Float:z, interior = 0, world = 0)
+{
+    if(GetPlayerState(playerid) == PLAYER_STATE_DRIVER && IsPlayerInAnyVehicle(playerid))
+    {
+        new vehicleid = GetPlayerVehicleID(playerid);
+        SetVehicleVirtualWorld(vehicleid, world);
+        LinkVehicleToInterior(vehicleid, interior);
+        for(new p = 0; p < MAX_PLAYERS; p++) if(IsPlayerConnected(p) && IsPlayerInVehicle(p, vehicleid))
+        {
+            SetPlayerInterior(p, interior);
+            SetPlayerVirtualWorld(p, world);
+        }
+        SetVehicleVelocity(vehicleid, 0.0, 0.0, 0.0);
+        SetVehiclePos(vehicleid, x, y, z);
+        VehicleHudLastPosValid[vehicleid] = false;
+    }
+    else
+    {
+        if(IsPlayerInAnyVehicle(playerid)) RemovePlayerFromVehicle(playerid);
+        SetPlayerInterior(playerid, interior);
+        SetPlayerVirtualWorld(playerid, world);
+        SetPlayerPos(playerid, x, y, z);
+        SetCameraBehindPlayer(playerid);
+    }
+    return 1;
+}
+
+forward JuniorApplyPenalties(playerid);
+public JuniorApplyPenalties(playerid)
+{
+    if(!IsPlayerConnected(playerid) || !GetPVarInt(playerid, "BR_LoggedIn")) return 1;
+    new file[128];
+    if(!JuniorAdminFile(playerid, file, sizeof(file))) return 1;
+    LoadExtendedPlayerStats(playerid);
+    JuniorMutedUntil[playerid] = DOF2_GetInt(file, "AdminMuteUntil");
+    JuniorJailedUntil[playerid] = DOF2_GetInt(file, "AdminJailUntil");
+    if(JuniorMutedUntil[playerid] < gettime()) JuniorMutedUntil[playerid] = 0;
+    if(JuniorJailedUntil[playerid] > gettime())
+    {
+        JuniorTeleport(playerid, 264.63, 77.57, 1001.04, 6, 0);
+        SendClientMessage(playerid, 0xFF7777FF, "[ZATVOR]: Vraceni ste u zatvor jer kazna jos traje.");
+    }
+    else JuniorJailedUntil[playerid] = 0;
+    return 1;
+}
+
+forward JuniorAdminTick();
+public JuniorAdminTick()
+{
+    new now = gettime();
+    for(new i = 0; i < MAX_PLAYERS; i++) if(IsPlayerConnected(i))
+    {
+        // Wanted upozorenje treperi: jednu sekundu se vidi, jednu je skriveno.
+        if(WantedPoints[i] > 0 && GetPVarInt(i, "BR_LoggedIn"))
+        {
+            if(WantedHintBlinkVisible[i])
+            {
+                PlayerTextDrawHide(i, TD_WantedHint[i]);
+                PlayerTextDrawHide(i, TD_WantedPolice[i]);
+                PlayerTextDrawHide(i, TD_WantedDosije[i]);
+                PlayerTextDrawHide(i, TD_WantedStars[i]);
+                WantedHintBlinkVisible[i] = false;
+            }
+            else UpdateWantedHint(i);
+        }
+        else if(WantedHintBlinkVisible[i])
+        {
+            PlayerTextDrawHide(i, TD_WantedHint[i]);
+            PlayerTextDrawHide(i, TD_WantedPolice[i]);
+            PlayerTextDrawHide(i, TD_WantedDosije[i]);
+            PlayerTextDrawHide(i, TD_WantedStars[i]);
+            WantedHintBlinkVisible[i] = false;
+        }
+
+        if(JuniorJailedUntil[i] > 0 && JuniorJailedUntil[i] <= now)
+        {
+            JuniorJailedUntil[i] = 0;
+            new jailFile[128];
+            if(JuniorAdminFile(i, jailFile, sizeof(jailFile)))
+            {
+                DOF2_SetInt(jailFile, "AdminJailUntil", 0);
+                DOF2_SaveFile();
+            }
+            TogglePlayerControllable(i, 1);
+            JuniorTeleport(i, 1544.5, -1675.6, 13.5, 0, 0);
+            SendClientMessage(i, 0x33CCFFFF, "[ZATVOR]: Kazna je istekla. Pusteni ste iz zatvora.");
+        }
+        if(JuniorMutedUntil[i] > 0 && JuniorMutedUntil[i] <= now)
+        {
+            JuniorMutedUntil[i] = 0;
+            new muteFile[128];
+            if(JuniorAdminFile(i, muteFile, sizeof(muteFile)))
+            {
+                DOF2_SetInt(muteFile, "AdminMuteUntil", 0);
+                DOF2_SaveFile();
+            }
+            SendClientMessage(i, 0x33CCFFFF, "[MUTE]: Ponovo mozete pisati.");
+        }
+    }
+    return 1;
+}
+
+
+CMD:pm(playerid, params[])
+{
+    new targetid, msg[100];
+    if(sscanf(params, "us[100]", targetid, msg)) return SendClientMessage(playerid, -1, "Koristenje: /pm [ID/Ime] [Poruka]");
+    if(!IsPlayerConnected(targetid)) return SendClientMessage(playerid, 0xFF7777FF, "Igrac nije online.");
+    new a[MAX_PLAYER_NAME], b[MAX_PLAYER_NAME], out[144]; GetPlayerName(playerid,a,sizeof(a)); GetPlayerName(targetid,b,sizeof(b));
+    format(out,sizeof(out),"(( PM za %s: %s ))",b,msg); SendClientMessage(playerid,0xDDA0DDFF,out);
+    format(out,sizeof(out),"(( PM od %s: %s ))",a,msg); SendClientMessage(targetid,0xDDA0DDFF,out); return 1;
+}
+
+CMD:aodg(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    new targetid, msg[100]; if(sscanf(params,"us[100]",targetid,msg)) return SendClientMessage(playerid,-1,"Koristenje: /aodg [ID/Ime] [Odgovor]");
+    if(!IsPlayerConnected(targetid)) return SendClientMessage(playerid,0xFF7777FF,"Igrac nije online.");
+    new name[MAX_PLAYER_NAME], out[144]; GetPlayerName(playerid,name,sizeof(name));
+    format(out,sizeof(out),"[ADMIN ODGOVOR] %s: %s",name,msg); SendClientMessage(targetid,0x33CCFFFF,out); SendClientMessage(playerid,0x33CCFFFF,out); return 1;
+}
+
+CMD:check(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    new targetid;
+    if(sscanf(params, "u", targetid) || !IsPlayerConnected(targetid))
+        return SendClientMessage(playerid, -1, "Koristenje: /check [ID/Ime]");
+
+    new name[MAX_PLAYER_NAME], ip[24], file[128], text[768], line[144];
+    new Float:health, Float:armour;
+    GetPlayerName(targetid, name, sizeof(name));
+    GetPlayerIp(targetid, ip, sizeof(ip));
+    GetPlayerHealth(targetid, health);
+    GetPlayerArmour(targetid, armour);
+    JuniorAdminFile(targetid, file, sizeof(file));
+    format(text, sizeof(text), "{33CCFF}IME:{FFFFFF} %s (ID %d)\n", name, targetid);
+    format(line, sizeof(line), "{33CCFF}IP/Ping:{FFFFFF} %s / %d\n", ip, GetPlayerPing(targetid)); strcat(text, line, sizeof(text));
+    format(line, sizeof(line), "{33CCFF}Level/Novac:{FFFFFF} %d / %d RSD\n", GetPlayerScore(targetid), GetPlayerMoney(targetid)); strcat(text, line, sizeof(text));
+    format(line, sizeof(line), "{33CCFF}Health/Armor:{FFFFFF} %.1f / %.1f\n", health, armour); strcat(text, line, sizeof(text));
+    format(line, sizeof(line), "{33CCFF}Skin/Admin:{FFFFFF} %d / %d\n", GetPlayerSkin(targetid), DOF2_GetInt(file, "Admin")); strcat(text, line, sizeof(text));
+    format(line, sizeof(line), "{33CCFF}Posao:{FFFFFF} %d\n", DOF2_GetInt(file, "Posao")); strcat(text, line, sizeof(text));
+    format(line, sizeof(line), "{33CCFF}Organizacija/Lider:{FFFFFF} %d / %d\n", DOF2_GetInt(file, "Organizacija"), DOF2_GetInt(file, "Lider")); strcat(text, line, sizeof(text));
+    format(line, sizeof(line), "{33CCFF}Wanted:{FFFFFF} %d", WantedPoints[targetid]); strcat(text, line, sizeof(text));
+    ShowPlayerDialog(playerid, DIALOG_ADMIN_CHECK, DIALOG_STYLE_MSGBOX, "Provjera igraca", text, "Zatvori", "");
+    return 1;
+}
+
+CMD:checkinv(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0; new id; if(sscanf(params,"u",id)||!IsPlayerConnected(id)) return SendClientMessage(playerid,-1,"Koristenje: /checkinv [ID/Ime]");
+    new n[MAX_PLAYER_NAME],t[512]; GetPlayerName(id,n,sizeof(n)); format(t,sizeof(t),"{33CCFF}Inventar igraca %s\n\n{FFFFFF}Meso: %d\nMlijeko: %d\nHljeb: %d\nJabuke: %d\nBanane: %d\nSok: %d\nZlato: %d",n,PlayerInfo[id][pMeso],PlayerInfo[id][pMleko],PlayerInfo[id][pHleb],PlayerInfo[id][pJabuke],PlayerInfo[id][pBanana],PlayerInfo[id][pSok],PlayerZlato[id]);
+    ShowPlayerDialog(playerid,DIALOG_ADMIN_CHECK,DIALOG_STYLE_MSGBOX,"Provjera inventara",t,"Zatvori",""); return 1;
+}
+
+CMD:checklic(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0; new id; if(sscanf(params,"u",id)||!IsPlayerConnected(id)) return SendClientMessage(playerid,-1,"Koristenje: /checklic [ID/Ime]");
+    new f[128],n[MAX_PLAYER_NAME],t[320]; GetPlayerName(id,n,sizeof(n)); JuniorAdminFile(id,f,sizeof(f));
+    format(t,sizeof(t),"{33CCFF}Dozvole igraca %s\n\n{FFFFFF}Vozacka: %s\nDozvola za oruzje: %s",n,DOF2_GetInt(f,"Vozacka")? ("IMA"):("NEMA"),DOF2_GetInt(f,"DozvolaOruzje")? ("IMA"):("NEMA"));
+    ShowPlayerDialog(playerid,DIALOG_ADMIN_CHECK,DIALOG_STYLE_MSGBOX,"Provjera dozvola",t,"Zatvori",""); return 1;
+}
+
+CMD:checkdm(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0; new id; if(sscanf(params,"u",id)||!IsPlayerConnected(id)) return SendClientMessage(playerid,-1,"Koristenje: /checkdm [ID/Ime]");
+    new n[MAX_PLAYER_NAME],t[256],Float:h,Float:a; GetPlayerName(id,n,sizeof(n)); GetPlayerHealth(id,h); GetPlayerArmour(id,a);
+    format(t,sizeof(t),"{33CCFF}DM provjera: %s\n\n{FFFFFF}Oruzje: %d\nMetci: %d\nHealth: %.1f\nArmor: %.1f\nWanted: %d",n,GetPlayerWeapon(id),GetPlayerAmmo(id),h,a,WantedPoints[id]); ShowPlayerDialog(playerid,DIALOG_ADMIN_CHECK,DIALOG_STYLE_MSGBOX,"DM provjera",t,"Zatvori",""); return 1;
+}
+
+CMD:checkw(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0; new id; if(sscanf(params,"u",id)||!IsPlayerConnected(id)) return SendClientMessage(playerid,-1,"Koristenje: /checkw [ID/Ime]");
+    new text[768],line[64],weapon,ammo,wname[32]; strcat(text,"{33CCFF}ORUZJE IGRACA\n\n",sizeof(text));
+    for(new slot=0;slot<13;slot++){GetPlayerWeaponData(id,slot,weapon,ammo);if(weapon>0&&ammo>0){GetWeaponName(weapon,wname,sizeof(wname));format(line,sizeof(line),"{FFFFFF}%s (ID %d): %d metaka\n",wname,weapon,ammo);strcat(text,line,sizeof(text));}}
+    ShowPlayerDialog(playerid,DIALOG_ADMIN_CHECK,DIALOG_STYLE_MSGBOX,"Provjera oruzja",text,"Zatvori",""); return 1;
+}
+
+CMD:setage(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0; new id,age; if(sscanf(params,"ui",id,age)) return SendClientMessage(playerid,-1,"Koristenje: /setage [ID/Ime] [Godine]"); if(!IsPlayerConnected(id)||age<10||age>100)return SendClientMessage(playerid,0xFF7777FF,"Igrac nije online ili godine nisu 10-100.");
+    new f[128]; JuniorAdminFile(id,f,sizeof(f)); PlayerInfo[id][pGodine]=age; DOF2_SetInt(f,"Godine",age); DOF2_SaveFile(); SendClientMessage(playerid,0x33CCFFFF,"[ADMIN]: Godine su postavljene."); return 1;
+}
+
+CMD:setjob(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    new targetid, jobid;
+    if(sscanf(params, "ui", targetid, jobid))
+        return SendClientMessage(playerid, -1, "Koristenje: /setjob [ID/Ime] [ID posla 0-20]");
+    if(!IsPlayerConnected(targetid) || jobid < 0 || jobid > 20)
+        return SendClientMessage(playerid, 0xFF7777FF, "Pogresan igrac ili ID posla.");
+    new file[128]; JuniorAdminFile(targetid, file, sizeof(file));
+    DOF2_SetInt(file, "Posao", jobid); DOF2_SaveFile();
+    SendClientMessage(playerid, 0x33CCFFFF, "[ADMIN]: Posao je postavljen.");
+    return 1;
+}
+
+CMD:setcarhp(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    new targetid, Float:health;
+    if(sscanf(params, "uf", targetid, health))
+        return SendClientMessage(playerid, -1, "Koristenje: /setcarhp [ID/Ime] [250-1000]");
+    if(!IsPlayerConnected(targetid) || !IsPlayerInAnyVehicle(targetid))
+        return SendClientMessage(playerid, 0xFF7777FF, "Igrac mora biti u vozilu.");
+    if(health < 250.0 || health > 1000.0)
+        return SendClientMessage(playerid, 0xFF7777FF, "HP vozila mora biti 250-1000.");
+    SetVehicleHealth(GetPlayerVehicleID(targetid), health);
+    SendClientMessage(playerid, 0x33CCFFFF, "[ADMIN]: HP vozila je postavljen.");
+    return 1;
+}
+
+CMD:askin(playerid, params[]){if(!HasAdminCommandAccess(playerid))return 0;new skin;if(sscanf(params,"i",skin)||skin<0||skin>311||skin==74)return SendClientMessage(playerid,-1,"Koristenje: /askin [0-311, osim 74]");SetPlayerSkin(playerid,skin);return 1;}
+CMD:sethp(playerid, params[]) return cmd_sethealth(playerid, params);
+CMD:setarmor(playerid, params[]) return cmd_setarmour(playerid, params);
+
+CMD:freeze(playerid, params[]){if(!HasAdminCommandAccess(playerid))return 0;new id;if(sscanf(params,"u",id)||!IsPlayerConnected(id))return SendClientMessage(playerid,-1,"Koristenje: /freeze [ID/Ime]");TogglePlayerControllable(id,0);JuniorFrozen[id]=true;SendClientMessage(id,0xFF7777FF,"[ADMIN]: Zamrznuti ste.");return 1;}
+CMD:unfreeze(playerid, params[]){if(!HasAdminCommandAccess(playerid))return 0;new id;if(sscanf(params,"u",id)||!IsPlayerConnected(id))return SendClientMessage(playerid,-1,"Koristenje: /unfreeze [ID/Ime]");TogglePlayerControllable(id,1);JuniorFrozen[id]=false;SendClientMessage(id,0x33CCFFFF,"[ADMIN]: Odmrznuti ste.");return 1;}
+CMD:auntie(playerid, params[]) return cmd_unfreeze(playerid, params);
+
+CMD:getcar(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    new targetid;
+    if(sscanf(params, "u", targetid))
+        return SendClientMessage(playerid, -1, "Koristenje: /getcar [ID/Ime igraca u vozilu]");
+    if(!IsPlayerConnected(targetid) || !IsPlayerInAnyVehicle(targetid))
+        return SendClientMessage(playerid, 0xFF7777FF, "Taj igrac nije online ili nije u vozilu.");
+
+    new vehicleid = GetPlayerVehicleID(targetid);
+    new interior = GetPlayerInterior(playerid);
+    new world = GetPlayerVirtualWorld(playerid);
+    new Float:x, Float:y, Float:z;
+    GetPlayerPos(playerid, x, y, z);
+    SetVehicleVirtualWorld(vehicleid, world);
+    LinkVehicleToInterior(vehicleid, interior);
+    for(new i = 0; i < MAX_PLAYERS; i++)
+    {
+        if(!IsPlayerConnected(i) || !IsPlayerInVehicle(i, vehicleid)) continue;
+        SetPlayerInterior(i, interior);
+        SetPlayerVirtualWorld(i, world);
+    }
+    SetVehicleVelocity(vehicleid, 0.0, 0.0, 0.0);
+    SetVehiclePos(vehicleid, x + 4.0, y, z + 0.5);
+    VehicleHudLastPosValid[vehicleid] = false;
+    SendClientMessage(playerid, 0x33CCFFFF, "[ADMIN]: Vozilo je teleportovano do vas.");
+    return 1;
+}
+
+CMD:awl(playerid, params[]){if(!HasAdminCommandAccess(playerid))return 0;new id,lvl,reason[64];if(sscanf(params,"uis[64]",id,lvl,reason)||!IsPlayerConnected(id)||lvl<1||lvl>20)return SendClientMessage(playerid,-1,"Koristenje: /awl [ID/Ime] [1-20] [Razlog]");AddWantedPoints(id,lvl,reason);return 1;}
+CMD:he(playerid, params[]){if(!HasAdminCommandAccess(playerid))return 0;SetPlayerHealth(playerid,100.0);SetPlayerArmour(playerid,100.0);SendClientMessage(playerid,0x33CCFFFF,"[ADMIN]: Health i armor su obnovljeni.");return 1;}
+
+CMD:flip(playerid, params[]){if(!HasAdminCommandAccess(playerid))return 0;new id;if(sscanf(params,"u",id))id=playerid;if(!IsPlayerConnected(id)||!IsPlayerInAnyVehicle(id))return SendClientMessage(playerid,-1,"Koristenje: /flip [ID/Ime igraca u vozilu]");new v=GetPlayerVehicleID(id);new Float:a;GetVehicleZAngle(v,a);SetVehicleZAngle(v,a);return 1;}
+CMD:apark(playerid, params[]){if(!HasAdminCommandAccess(playerid))return 0;if(!IsPlayerInAnyVehicle(playerid))return SendClientMessage(playerid,0xFF7777FF,"Morate biti u vozilu.");new v=GetPlayerVehicleID(playerid);SetVehicleVelocity(v,0.0,0.0,0.0);VehicleHudSaveKm(v);SendClientMessage(playerid,0x33CCFFFF,"[ADMIN]: Vozilo je parkirano; kilometraza je sacuvana.");return 1;}
+
+CMD:cc(playerid, params[]){if(!HasAdminCommandAccess(playerid))return 0;for(new i=0;i<30;i++)SendClientMessageToAll(-1," ");SendClientMessageToAll(0x33CCFFFF,"[ADMIN]: Chat je ociscen.");return 1;}
+CMD:mute(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    new targetid, minutes, reason[64];
+    if(sscanf(params, "uis[64]", targetid, minutes, reason))
+        return SendClientMessage(playerid, -1, "Koristenje: /mute [ID/Ime] [Minute] [Razlog]");
+    if(!IsPlayerConnected(targetid) || minutes < 1 || minutes > 1440)
+        return SendClientMessage(playerid, 0xFF7777FF, "Pogresan igrac ili trajanje mutea.");
+    JuniorMutedUntil[targetid] = gettime() + minutes * 60;
+    new file[128]; JuniorAdminFile(targetid, file, sizeof(file));
+    DOF2_SetInt(file, "AdminMuteUntil", JuniorMutedUntil[targetid]); DOF2_SaveFile();
+    new message[128];
+    format(message, sizeof(message), "[MUTE]: Mutovani ste %d minuta. Razlog: %s", minutes, reason);
+    SendClientMessage(targetid, 0xFF7777FF, message);
+    SendClientMessage(playerid, 0x33CCFFFF, "[ADMIN]: Igrac je mutovan.");
+    AddPlayerSavedStat(targetid, "AdminKazne", 1);
+    return 1;
+}
+
+CMD:unmute(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    new targetid;
+    if(sscanf(params, "u", targetid) || !IsPlayerConnected(targetid))
+        return SendClientMessage(playerid, -1, "Koristenje: /unmute [ID/Ime]");
+    JuniorMutedUntil[targetid] = 0;
+    new file[128]; JuniorAdminFile(targetid, file, sizeof(file));
+    DOF2_SetInt(file, "AdminMuteUntil", 0); DOF2_SaveFile();
+    SendClientMessage(targetid, 0x33CCFFFF, "[MUTE]: Admin vam je uklonio mute.");
+    SendClientMessage(playerid, 0x33CCFFFF, "[ADMIN]: Mute je uklonjen.");
+    return 1;
+}
+
+CMD:ajail(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    new targetid, minutes, reason[64];
+    if(sscanf(params, "uis[64]", targetid, minutes, reason))
+        return SendClientMessage(playerid, -1, "Koristenje: /ajail [ID/Ime] [Minute] [Razlog]");
+    if(!IsPlayerConnected(targetid) || minutes < 1 || minutes > 1440)
+        return SendClientMessage(playerid, 0xFF7777FF, "Pogresan igrac ili trajanje zatvora.");
+    JuniorJailedUntil[targetid] = gettime() + minutes * 60;
+    new file[128]; JuniorAdminFile(targetid, file, sizeof(file));
+    DOF2_SetInt(file, "AdminJailUntil", JuniorJailedUntil[targetid]); DOF2_SaveFile();
+    JuniorTeleport(targetid, 264.63, 77.57, 1001.04, 6, 0);
+    new message[128];
+    format(message, sizeof(message), "[ZATVOR]: Zatvoreni ste %d minuta. Razlog: %s", minutes, reason);
+    SendClientMessage(targetid, 0xFF7777FF, message);
+    AddPlayerSavedStat(targetid, "AdminKazne", 1);
+    return 1;
+}
+
+CMD:jailed(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    new targetid;
+    if(sscanf(params, "u", targetid) || !IsPlayerConnected(targetid))
+        return SendClientMessage(playerid, -1, "Koristenje: /jailed [ID/Ime]");
+    new message[128];
+    if(JuniorJailedUntil[targetid] > gettime())
+        format(message, sizeof(message), "[ZATVOR]: Igracu je ostalo %d sekundi.", JuniorJailedUntil[targetid] - gettime());
+    else
+        format(message, sizeof(message), "[ZATVOR]: Igrac nije zatvoren.");
+    SendClientMessage(playerid, 0x33CCFFFF, message);
+    return 1;
+}
+
+CMD:akick(playerid, params[]) return cmd_kick(playerid, params);
+CMD:rpslap(playerid, params[]){if(!HasAdminCommandAccess(playerid))return 0;new id,reason[64];if(sscanf(params,"us[64]",id,reason)||!IsPlayerConnected(id))return SendClientMessage(playerid,-1,"Koristenje: /rpslap [ID/Ime] [Razlog]");new Float:h;GetPlayerHealth(id,h);SetPlayerHealth(id,h>10.0?h-10.0:1.0);new m[128];format(m,sizeof(m),"[RP SLAP]: Izgubili ste 10 HP. Razlog: %s",reason);SendClientMessage(id,0xFF7777FF,m);return 1;}
+CMD:napravipoklon(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    new targetid;
+    if(sscanf(params, "u", targetid) || !IsPlayerConnected(targetid))
+        return SendClientMessage(playerid, -1, "Koristenje: /napravipoklon [ID/Ime]");
+    new amount = 500 + random(1501);
+    GivePlayerMoney(targetid, amount);
+    PlayerInfo[targetid][pNovac] = GetPlayerMoney(targetid);
+    new file[128], message[128];
+    JuniorAdminFile(targetid, file, sizeof(file));
+    DOF2_SetInt(file, "Novac", PlayerInfo[targetid][pNovac]);
+    DOF2_SaveFile();
+    format(message, sizeof(message), "[POKLON]: Dobili ste administrativni poklon od %d RSD.", amount);
+    SendClientMessage(targetid, 0x33CCFFFF, message);
+    SendClientMessage(playerid, 0x33CCFFFF, "[ADMIN]: Poklon je urucen igracu.");
+    return 1;
+}
+
+CMD:masked(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    new targetid;
+    if(sscanf(params, "u", targetid) || !IsPlayerConnected(targetid))
+        return SendClientMessage(playerid, -1, "Koristenje: /masked [ID/Ime]");
+    if(GetPVarInt(targetid, "BR_Masked"))
+        SendClientMessage(playerid, 0x33CCFFFF, "[MASKA]: Igrac nosi masku.");
+    else
+        SendClientMessage(playerid, 0x33CCFFFF, "[MASKA]: Igrac ne nosi masku.");
+    return 1;
+}
+
+CMD:spec(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    new targetid;
+    if(sscanf(params, "u", targetid) || !IsPlayerConnected(targetid) || targetid == playerid)
+        return SendClientMessage(playerid, -1, "Koristenje: /spec [ID/Ime drugog igraca]");
+
+    GetPlayerPos(playerid, JuniorSpecX[playerid], JuniorSpecY[playerid], JuniorSpecZ[playerid]);
+    JuniorSpecInterior[playerid] = GetPlayerInterior(playerid);
+    JuniorSpecWorld[playerid] = GetPlayerVirtualWorld(playerid);
+    SetPlayerInterior(playerid, GetPlayerInterior(targetid));
+    SetPlayerVirtualWorld(playerid, GetPlayerVirtualWorld(targetid));
+    TogglePlayerSpectating(playerid, 1);
+    PlayerSpectatePlayer(playerid, targetid);
+    JuniorSpectating[playerid] = true;
+    SendClientMessage(playerid, 0x33CCFFFF, "[SPEC]: Posmatrate igraca. Koristite /specoff za izlaz.");
+    return 1;
+}
+
+CMD:specoff(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    if(!JuniorSpectating[playerid])
+        return SendClientMessage(playerid, 0xFF7777FF, "Niste u spec modu.");
+    TogglePlayerSpectating(playerid, 0);
+    JuniorSpectating[playerid] = false;
+    SetPlayerInterior(playerid, JuniorSpecInterior[playerid]);
+    SetPlayerVirtualWorld(playerid, JuniorSpecWorld[playerid]);
+    SetPlayerPos(playerid, JuniorSpecX[playerid], JuniorSpecY[playerid], JuniorSpecZ[playerid]);
+    SetCameraBehindPlayer(playerid);
+    return 1;
+}
+
+stock JuniorStaffChat(playerid, const channel[], const msg[])
+{
+    if(!HasAdminCommandAccess(playerid))return 0;new n[MAX_PLAYER_NAME],o[144];GetPlayerName(playerid,n,sizeof(n));format(o,sizeof(o),"[%s] %s[%d]: %s",channel,n,playerid,msg);JuniorAdminMessage(o);return 1;
+}
+CMD:a(playerid,params[]){if(!strlen(params))return SendClientMessage(playerid,-1,"Koristenje: /a [Poruka]");return JuniorStaffChat(playerid,"ADMIN CHAT",params);}
+CMD:g(playerid,params[]){if(!strlen(params))return SendClientMessage(playerid,-1,"Koristenje: /g [Poruka]");return JuniorStaffChat(playerid,"STAFF CHAT",params);}
+CMD:h(playerid,params[]){if(!strlen(params))return SendClientMessage(playerid,-1,"Koristenje: /h [Poruka]");return JuniorStaffChat(playerid,"HELPER CHAT",params);}
+CMD:o(playerid,params[]){if(!strlen(params))return SendClientMessage(playerid,-1,"Koristenje: /o [Poruka]");return JuniorStaffChat(playerid,"ORG NADZOR",params);}
+CMD:or(playerid,params[]){if(!strlen(params))return SendClientMessage(playerid,-1,"Koristenje: /or [Poruka]");return JuniorStaffChat(playerid,"ORG RADIO",params);}
+CMD:pr(playerid,params[]){if(!strlen(params))return SendClientMessage(playerid,-1,"Koristenje: /pr [Poruka]");return JuniorStaffChat(playerid,"REPORT CHAT",params);}
+
+CMD:lockgchat(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    JuniorGlobalChatLocked = !JuniorGlobalChatLocked;
+    if(JuniorGlobalChatLocked)
+        SendClientMessageToAll(0x33CCFFFF, "[CHAT]: Admin je zakljucao globalni chat.");
+    else
+        SendClientMessageToAll(0x33CCFFFF, "[CHAT]: Admin je otkljucao globalni chat.");
+    return 1;
+}
+
+CMD:mutegchat(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;JuniorGlobalChatLocked=true;SendClientMessageToAll(0x33CCFFFF,"[CHAT]: Globalni chat je ugasen.");return 1;}
+CMD:unmutegchat(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;JuniorGlobalChatLocked=false;SendClientMessageToAll(0x33CCFFFF,"[CHAT]: Globalni chat je ukljucen.");return 1;}
+CMD:mutead(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;if(JuniorAdsMuted) return SendClientMessage(playerid,0xFF7777FF,"[ADMIN]: Oglasi su vec ugaseni.");JuniorAdsMuted=true;return SendClientMessage(playerid,0x33CCFFFF,"[ADMIN]: Oglasi su ugaseni.");}
+CMD:unmutead(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;JuniorAdsMuted=false;return SendClientMessage(playerid,0x33CCFFFF,"[ADMIN]: Oglasi su ukljuceni.");}
+CMD:muteaskq(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;if(JuniorAskMuted) return SendClientMessage(playerid,0xFF7777FF,"[ADMIN]: Pitanja su vec ugasena.");JuniorAskMuted=true;return SendClientMessage(playerid,0x33CCFFFF,"[ADMIN]: Pitanja su ugasena.");}
+CMD:unmuteaskq(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;JuniorAskMuted=false;return SendClientMessage(playerid,0x33CCFFFF,"[ADMIN]: Pitanja su ukljucena.");}
+CMD:mutereport(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;if(JuniorReportsMuted) return SendClientMessage(playerid,0xFF7777FF,"[ADMIN]: Reporti su vec ugaseni.");JuniorReportsMuted=true;return SendClientMessage(playerid,0x33CCFFFF,"[ADMIN]: Reporti su ugaseni.");}
+CMD:unmutereport(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;JuniorReportsMuted=false;return SendClientMessage(playerid,0x33CCFFFF,"[ADMIN]: Reporti su ukljuceni.");}
+
+CMD:startevent(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;GetPlayerPos(playerid,JuniorEventX,JuniorEventY,JuniorEventZ);JuniorEventInterior=GetPlayerInterior(playerid);JuniorEventWorld=GetPlayerVirtualWorld(playerid);JuniorEventActive=true;SendClientMessageToAll(0x33CCFFFF,"[EVENT]: Admin je pokrenuo event.");return 1;}
+CMD:stopevent(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;JuniorEventActive=false;SendClientMessageToAll(0x33CCFFFF,"[EVENT]: Admin je zavrsio event.");return 1;}
+CMD:checkevent(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;if(!JuniorEventActive)return SendClientMessage(playerid,0xFF7777FF,"[EVENT]: Trenutno nema aktivnog eventa.");new m[128];format(m,sizeof(m),"[EVENT]: Aktivan je na %.1f, %.1f, %.1f (Int %d, VW %d).",JuniorEventX,JuniorEventY,JuniorEventZ,JuniorEventInterior,JuniorEventWorld);return SendClientMessage(playerid,0x33CCFFFF,m);}
+CMD:acontracts(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;ShowPlayerDialog(playerid,DIALOG_ADMIN_CHECK,DIALOG_STYLE_MSGBOX,"Admin ugovori","{FFFFFF}Na serveru trenutno nema aktivnog sistema ugovora.","Zatvori","");return 1;}
+
+CMD:gotolist(playerid, params[])
+{
+    if(!HasAdminCommandAccess(playerid)) return 0;
+    new text[640];
+    strcat(text, "{33CCFF}/gotoautosk{FFFFFF} - autoskola\n", sizeof(text));
+    strcat(text, "{33CCFF}/gotoplanina{FFFFFF} - Mount Chiliad\n", sizeof(text));
+    strcat(text, "{33CCFF}/gotoaerodrom{FFFFFF} - aerodrom\n", sizeof(text));
+    strcat(text, "{33CCFF}/gotojob{FFFFFF} - centar poslova\n", sizeof(text));
+    strcat(text, "{33CCFF}/gotopijaca{FFFFFF} - pijaca\n", sizeof(text));
+    strcat(text, "{33CCFF}/gotoboks{FFFFFF} - boks sala\n", sizeof(text));
+    strcat(text, "{33CCFF}/gotojetn{FFFFFF} - pista za avione\n", sizeof(text));
+    strcat(text, "{33CCFF}/gotomc{FFFFFF} - Mount Chiliad", sizeof(text));
+    ShowPlayerDialog(playerid, DIALOG_ADMIN_CHECK, DIALOG_STYLE_MSGBOX, "Admin teleport lokacije", text, "Zatvori", "");
+    return 1;
+}
+
+CMD:gotoautosk(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;JuniorTeleport(playerid,2045.8,-1908.2,13.5);return 1;}
+CMD:gotoplanina(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;JuniorTeleport(playerid,-2329.1,-1624.2,483.7);return 1;}
+CMD:gotomc(playerid,params[]){return cmd_gotoplanina(playerid,params);}
+CMD:gotoaerodrom(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;JuniorTeleport(playerid,1685.9,-2331.2,13.5);return 1;}
+CMD:gotojetn(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;JuniorTeleport(playerid,1958.4,-2493.6,13.5);return 1;}
+CMD:gotojob(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;JuniorTeleport(playerid,330.7,-1509.8,36.0);return 1;}
+CMD:gotopijaca(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;JuniorTeleport(playerid,1127.0,-1439.2,15.8);return 1;}
+CMD:gotoboks(playerid,params[]){if(!HasAdminCommandAccess(playerid))return 0;JuniorTeleport(playerid,768.0,-19.0,1000.7,5,0);return 1;}
 
 forward CheckTemporaryNames();
 
@@ -12345,8 +13332,8 @@ CMD:name(playerid, params[])
     GetPlayerName(playerid, adminname, sizeof(adminname));
     format(adminfile, sizeof(adminfile), "Korisnici/%s.ini", adminname);
     new adminlevel = DOF2_FileExists(adminfile) ? DOF2_GetInt(adminfile, "Admin") : 0;
-    if(adminlevel < 9 && !IsPlayerAdmin(playerid))
-        return SendClientMessage(playerid, 0xFF0000FF, "[IME]: Samo Vlasnik ili RCON admin moze koristiti /name.");
+    if(adminlevel < 1 && !IsPlayerAdmin(playerid))
+        return SendClientMessage(playerid, 0xFF0000FF, "[IME]: Ovu komandu mogu koristiti Junior Admini i visi rankovi.");
 
     new targetid, days, desired[MAX_PLAYER_NAME];
     if(sscanf(params, "us[24]d", targetid, desired, days))

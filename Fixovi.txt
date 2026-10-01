@@ -1,0 +1,13 @@
+/preuzmivozilo - sa H da se kapija otvara
+Chat promjenit da je sve jednom bojom znaci da je odredjeno sta sta radi
+Admin komande i passive sve radi samo dok je na Duty
+/jetpack vide sve a treba samo jedan igrac vidit
+BRZI PRSTI treba bit svjetlo crveno
+kad se ukljuci happyjob treba da svima pise [HAPPYJOB]: Admin %s je ukljucio HappyJob za Posao: …
+
+
+svaki sat se trosi 1 faktura /100
+dok je tutorijal za novog igraca ne treba bit nijedan textdraw prisutan
+/bizzhelp treba da se izbaci da ima komanda samo help
+
+/help biznis treba da izbaci fino, crvena slova /komanda - (Zelena boja) objasnjenje

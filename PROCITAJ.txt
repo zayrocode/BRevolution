@@ -74,3 +74,5 @@ BANKA EKSTERIJER I ULAZ
 Osam objekata iz Banka Exterijer.txt je u gamemodes\BE.pwn.
 Pritisnite F kod 1462.9076, -1022.8073 za ulaz, a kod 153.7911, 1702.7163 za izlaz.
 Obje tacke su u Interior 0 i VirtualWorld 0.
+
+
