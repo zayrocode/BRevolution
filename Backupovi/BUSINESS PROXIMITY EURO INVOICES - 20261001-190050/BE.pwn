@@ -89,10 +89,6 @@ forward LoadAdminParkedVehicles();
 #define DIALOG_PRICEPRODUCTS_ROD_PRICE 15041
 #define DIALOG_HELP_HOUSE 15042
 #define DIALOG_HELP_FACTION 15043
-#define DIALOG_BUSINESS_VEHICLE_BUY 15044
-#define DIALOG_BUY_EURO 15045
-#define DIALOG_SELL_EURO 15046
-#define DIALOG_EURO_RATES 15047
 #define DIALOG_BIZZ_BANK_MENU_BASE 15100
 #define DIALOG_BIZZ_BANK_DEPOSIT_BASE 15200
 #define DIALOG_BIZZ_BANK_WITHDRAW_BASE 15300
@@ -199,16 +195,7 @@ new PoliceTrackTarget[MAX_PLAYERS];
 #define MAX_RIBOLOVAC_MAMACA 3
 #define MAX_BUSINESS_VEHICLES 5
 #define FISHING_BOAT_MODEL 453
-#define FISHING_BOAT_PRICE_EURO 15000
-#define MAX_BUSINESS_MARKET_VEHICLES 32
-#define BUSINESS_VEHICLE_MARKET_BOAT 1
-#define BUSINESS_VEHICLE_MARKET_TRUCK 2
-#define BUSINESS_VEHICLE_MARKET_CAR 3
-#define BUSINESS_VEHICLE_MARKET_MOTORCYCLE 4
-#define EURO_EXCHANGE_FILE "BalkanRP/EuroExchange.ini"
-#define EURO_MIN_RATE 115.0
-#define EURO_MAX_RATE 120.0
-#define MAX_EURO_BALANCE 2000000000
+#define FISHING_BOAT_PRICE 100000
 #define FISHING_BOAT_RENT_MIN_MINUTES 5
 #define FISHING_BOAT_RENT_MAX_MINUTES 120
 #define OFFSHORE_MIN_X 698.8413
@@ -233,12 +220,9 @@ forward bool:IsBusinessOwner(playerid, businessid);
 forward bool:IsBusinessCoOwner(playerid, businessid);
 forward bool:CanManageBusiness(playerid, businessid);
 forward bool:CanManageBusinessHere(playerid, businessid);
-forward CompleteBusinessVehiclePurchase(playerid, businessid, marketIndex, marketVehicleId);
-forward UpdateEuroExchangeRate();
 forward bool:CanBusinessUseProducts(businessid);
 forward bool:CanBusinessUseEntranceFee(businessid);
 forward bool:HasBusinessProducts(businessid, amount = 1);
-forward bool:ParsePositiveBusinessAmount(const inputtext[], &amount);
 forward BusinessInvoiceTick();
 forward HandleBusinessBankDialog(playerid, dialogid, response, listitem, inputtext[]);
 new kapija_parking;
@@ -871,36 +855,6 @@ new PendingBizzStateSale[MAX_PLAYERS];
 new PendingBizzSeller[MAX_PLAYERS];
 new PendingBizzId[MAX_PLAYERS];
 new PendingBizzPrice[MAX_PLAYERS];
-new PendingBusinessVehiclePurchase[MAX_PLAYERS];
-new PendingBusinessVehicleModel[MAX_PLAYERS];
-new PendingBusinessVehicleColor1[MAX_PLAYERS];
-new PendingBusinessVehicleColor2[MAX_PLAYERS];
-new PendingBusinessMarketVehicle[MAX_PLAYERS];
-new PendingBusinessMarketVehicleId[MAX_PLAYERS];
-
-enum E_BUSINESS_MARKET_VEHICLE
-{
-    bool:BmvExists,
-    BmvMarketId,
-    BmvMarketType,
-    BmvModel,
-    BmvPriceEuro,
-    BmvColor1,
-    BmvColor2,
-    Float:BmvX,
-    Float:BmvY,
-    Float:BmvZ,
-    Float:BmvA,
-    BmvInterior,
-    BmvWorld,
-    BmvVehicleId
-};
-new BusinessMarketVehicle[MAX_BUSINESS_MARKET_VEHICLES][E_BUSINESS_MARKET_VEHICLE];
-new Float:EuroMiddleRate = 117.20;
-new Float:EuroBuyRate = 117.60;
-new Float:EuroSellRate = 116.80;
-new EuroRateChangedAt;
-new EuroRateTimer;
 
 #define MAX_SERVER_NPCS 100
 enum E_SERVER_NPC
@@ -921,7 +875,6 @@ enum E_PLAYER_INFO
 {
     pLevel,
     pNovac,
-    pEuro,
     pZlato,
     pGodine,
     pRespekti,
@@ -1028,34 +981,14 @@ stock PlayerText:CreateRentTextDraw(playerid)
     return td;
 }
 
-stock IsStaffOnDuty(playerid)
-{
-    if(!GetPVarInt(playerid, "BR_LoggedIn")) return 0;
-    new name[MAX_PLAYER_NAME], file[128];
-    GetPlayerName(playerid, name, sizeof(name));
-    format(file, sizeof(file), "Korisnici/%s.ini", name);
-    if(!DOF2_FileExists(file)) return 0;
-    return DOF2_GetInt(file, "AdminDuty") == 1 || DOF2_GetInt(file, "HDuty") == 1;
-}
-
-stock IsStaffAccount(playerid)
-{
-    if(!GetPVarInt(playerid, "BR_LoggedIn")) return 0;
-    new name[MAX_PLAYER_NAME], file[128];
-    GetPlayerName(playerid, name, sizeof(name));
-    format(file, sizeof(file), "Korisnici/%s.ini", name);
-    if(!DOF2_FileExists(file)) return IsPlayerAdmin(playerid);
-    return IsPlayerAdmin(playerid) || DOF2_GetInt(file, "Admin") > 0 || DOF2_GetInt(file, "Helper") > 0;
-}
-
 stock HasAdminCommandAccess(playerid)
 {
+    if(IsPlayerAdmin(playerid)) return 1;
     if(!GetPVarInt(playerid, "BR_LoggedIn")) return 0;
     new name[MAX_PLAYER_NAME], file[128];
     GetPlayerName(playerid, name, sizeof(name));
     format(file, sizeof(file), "Korisnici/%s.ini", name);
-    if(!DOF2_FileExists(file) || DOF2_GetInt(file, "AdminDuty") != 1) return 0;
-    return IsPlayerAdmin(playerid) || DOF2_GetInt(file, "Admin") >= 1;
+    return (DOF2_FileExists(file) && DOF2_GetInt(file, "Admin") >= 1);
 }
 
 stock ShowMainHelp(playerid)
@@ -1102,10 +1035,7 @@ stock ShowPlayerHelp(playerid)
     strcat(text, "{00FF00}/me {FFFFFF}- Opis radnje vaseg lika\n", sizeof(text));
     strcat(text, "{00FF00}/do {FFFFFF}- Opis stanja ili okoline\n", sizeof(text));
     strcat(text, "{00FF00}/b {FFFFFF}- Lokalni OOC chat\n", sizeof(text));
-    strcat(text, "{00FF00}/otvoriracun {FFFFFF}- Otvaranje bankovnog racuna u banci\n", sizeof(text));
-    strcat(text, "{00FF00}/kupieuro {FFFFFF}- Kupovina EUR u mjenjacnici\n", sizeof(text));
-    strcat(text, "{00FF00}/prodajeuro {FFFFFF}- Prodaja EUR u mjenjacnici\n", sizeof(text));
-    strcat(text, "{00FF00}/kursnalista {FFFFFF}- Pregled trenutnog EUR kursa", sizeof(text));
+    strcat(text, "{00FF00}/otvoriracun {FFFFFF}- Otvaranje bankovnog racuna u banci", sizeof(text));
     ShowPlayerDialog(playerid, DIALOG_HELP_PLAYER, DIALOG_STYLE_MSGBOX, "Pomoc - Igrac", text, "Nazad", "Zatvori");
     return 1;
 }
@@ -1145,26 +1075,26 @@ stock ShowJobHelp(playerid)
 stock ShowBusinessHelp(playerid)
 {
     new text[3072];
-    strcat(text, "{FF0000}/buybizz {00FF00}- Kupovina biznisa\n", sizeof(text));
-    strcat(text, "{FF0000}/sellbizz {00FF00}- Prodaja biznisa drzavi\n", sizeof(text));
-    strcat(text, "{FF0000}/psellto {00FF00}- Prodaja biznisa drugom igracu\n", sizeof(text));
-    strcat(text, "{FF0000}/bizzinfo {00FF00}- Pregled informacija vaseg biznisa\n", sizeof(text));
-    strcat(text, "{FF0000}/priceproducts {00FF00}- Upravljanje cijenama podrzanih proizvoda i usluga\n", sizeof(text));
-    strcat(text, "{FF0000}/esterbon {00FF00}- Ponuda mjesta suvlasnika\n", sizeof(text));
-    strcat(text, "{FF0000}/uklonisuvlasnika {00FF00}- Uklanjanje suvlasnika\n", sizeof(text));
-    strcat(text, "{FF0000}/bizzname {00FF00}- Postavljanje opisa biznisa\n", sizeof(text));
-    strcat(text, "{FF0000}/bizzfee {00FF00}- Postavljanje cijene ulaza ako ga biznis podrzava\n", sizeof(text));
-    strcat(text, "{FF0000}/bizzbank {00FF00}- Deposit i Withdraw novca preko dijaloga\n", sizeof(text));
-    strcat(text, "{FF0000}/ob buy {00FF00}- Da kupite vozilo za vasu firmu\n", sizeof(text));
-    strcat(text, "{FF0000}/ob sell {00FF00}- Da prodate firmino vozilo\n", sizeof(text));
-    strcat(text, "{FF0000}/ob park {00FF00}- Da parkirate firmino vozilo\n", sizeof(text));
-    strcat(text, "{FF0000}/ob sellcar {00FF00}- Da prodate firmino vozilo na otpad\n", sizeof(text));
-    strcat(text, "{FF0000}/obcolor {00FF00}- Promjena boje firminog vozila\n\n", sizeof(text));
-    strcat(text, "{FFFFFF}FAKTURE ZA BIZNIS\n", sizeof(text));
-    strcat(text, "{FF0000}/kupifakture {00FF00}- Kupovina od 1 do najvise 10 faktura odjednom\n", sizeof(text));
-    strcat(text, "{FF0000}/keepingbizz [kolicina] {00FF00}- Ubacivanje vasih faktura u biznis\n", sizeof(text));
-    strcat(text, "{FFFFFF}Maksimum biznisa: {00FF00}100 faktura\n", sizeof(text));
-    strcat(text, "{FFFFFF}Potrosnja: {00FF00}1 faktura svakih 60 minuta", sizeof(text));
+    strcat(text, "{00FF00}/buybizz {FFFFFF}- Kupovina biznisa\n", sizeof(text));
+    strcat(text, "{00FF00}/sellbizz {FFFFFF}- Prodaja biznisa drzavi\n", sizeof(text));
+    strcat(text, "{00FF00}/psellto {FFFFFF}- Prodaja biznisa drugom igracu\n", sizeof(text));
+    strcat(text, "{00FF00}/bizzinfo {FFFFFF}- Pregled informacija vaseg biznisa\n", sizeof(text));
+    strcat(text, "{00FF00}/priceproducts {FFFFFF}- Upravljanje cijenama podrzanih proizvoda i usluga\n", sizeof(text));
+    strcat(text, "{00FF00}/esterbon {FFFFFF}- Ponuda mjesta suvlasnika\n", sizeof(text));
+    strcat(text, "{00FF00}/uklonisuvlasnika {FFFFFF}- Uklanjanje suvlasnika\n", sizeof(text));
+    strcat(text, "{00FF00}/bizzname {FFFFFF}- Postavljanje opisa biznisa\n", sizeof(text));
+    strcat(text, "{00FF00}/bizzfee {FFFFFF}- Postavljanje cijene ulaza ako je biznis podrzava\n", sizeof(text));
+    strcat(text, "{00FF00}/bizzbank {FFFFFF}- Deposit i Withdraw novca preko dijaloga\n", sizeof(text));
+    strcat(text, "{00FF00}/ob buy {FFFFFF}- Da kupite vozilo za vasu firmu\n", sizeof(text));
+    strcat(text, "{00FF00}/ob sell {FFFFFF}- Da prodate firmino vozilo\n", sizeof(text));
+    strcat(text, "{00FF00}/ob park {FFFFFF}- Da parkirate firmino vozilo\n", sizeof(text));
+    strcat(text, "{00FF00}/ob sellcar {FFFFFF}- Da prodate firmino vozilo na otpad\n", sizeof(text));
+    strcat(text, "{00FF00}/obcolor {FFFFFF}- Promjena boje firminog vozila\n\n", sizeof(text));
+    strcat(text, "{33AAFF}FAKTURE ZA BIZNIS\n", sizeof(text));
+    strcat(text, "{00FF00}/kupifakture {FFFFFF}- Kupovina od 1 do najvise 10 faktura odjednom\n", sizeof(text));
+    strcat(text, "{00FF00}/keepingbizz [kolicina] {FFFFFF}- Ubacivanje vasih faktura u biznis\n", sizeof(text));
+    strcat(text, "{33AAFF}Maksimum biznisa: {FFFFFF}100 faktura\n", sizeof(text));
+    strcat(text, "{33AAFF}Potrosnja: {FFFFFF}1 faktura svakih 60 minuta", sizeof(text));
     ShowPlayerDialog(playerid, DIALOG_BIZZ_HELP, DIALOG_STYLE_MSGBOX, "{66CCFF}Komande za Biznise", text, "Nazad", "Zatvori");
     return 1;
 }
@@ -1205,12 +1135,12 @@ stock ShowAdminHelp(playerid)
 
 stock IsAntiSpamExempt(playerid)
 {
+    if(IsPlayerAdmin(playerid)) return 1;
     new name[MAX_PLAYER_NAME], file[128];
     GetPlayerName(playerid, name, sizeof(name));
     format(file, sizeof(file), "Korisnici/%s.ini", name);
     if(!DOF2_FileExists(file)) return 0;
-    return (DOF2_GetInt(file, "Admin") > 0 && DOF2_GetInt(file, "AdminDuty") == 1) ||
-        (DOF2_GetInt(file, "Helper") > 0 && DOF2_GetInt(file, "HDuty") == 1);
+    return DOF2_GetInt(file, "Admin") > 0 || DOF2_GetInt(file, "Helper") > 0;
 }
 
 stock CheckPlayerAntiSpam(playerid)
@@ -1397,9 +1327,9 @@ public BrziPrstiTimer()
     BrziPrstiNagrada = 100 + random(401);
     BrziPrstiActive = true;
     new message[144];
-    SendClientMessageToAll(0xFF7777FF, "|============| BRZI PRSTI |============|");
+    SendClientMessageToAll(0xFF6B35FF, "|============| BRZI PRSTI |============|");
     format(message, sizeof(message), "|- Ko prvi ukuca %s osvaja %d dinara !", BrziPrstiKod, BrziPrstiNagrada);
-    SendClientMessageToAll(0xFF7777FF, message);
+    SendClientMessageToAll(0xFF6B35FF, message);
     return 1;
 }
 
@@ -1699,200 +1629,6 @@ CMD:otvoriracun(playerid, params[])
     return 1;
 }
 
-stock SaveEuroExchange()
-{
-    if(!DOF2_FileExists(EURO_EXCHANGE_FILE)) DOF2_CreateFile(EURO_EXCHANGE_FILE);
-    DOF2_SetFloat(EURO_EXCHANGE_FILE, "MiddleRate", EuroMiddleRate);
-    DOF2_SetFloat(EURO_EXCHANGE_FILE, "BuyRate", EuroBuyRate);
-    DOF2_SetFloat(EURO_EXCHANGE_FILE, "SellRate", EuroSellRate);
-    DOF2_SetInt(EURO_EXCHANGE_FILE, "ChangedAt", EuroRateChangedAt);
-    new year, month, day, hour, minute, second, changed[32];
-    getdate(year, month, day); gettime(hour, minute, second);
-    format(changed, sizeof(changed), "%02d.%02d.%04d %02d:%02d", day, month, year, hour, minute);
-    DOF2_SetString(EURO_EXCHANGE_FILE, "ChangedText", changed);
-    DOF2_SaveFile();
-    return 1;
-}
-
-stock LoadEuroExchange()
-{
-    new bool:fileExists = DOF2_FileExists(EURO_EXCHANGE_FILE) != 0;
-    new bool:needsSave = !fileExists;
-    if(fileExists)
-    {
-        EuroMiddleRate = DOF2_GetFloat(EURO_EXCHANGE_FILE, "MiddleRate");
-        EuroRateChangedAt = DOF2_GetInt(EURO_EXCHANGE_FILE, "ChangedAt");
-    }
-    if(!fileExists || EuroMiddleRate < EURO_MIN_RATE || EuroMiddleRate > EURO_MAX_RATE)
-    {
-        EuroMiddleRate = 117.20;
-        EuroRateChangedAt = gettime();
-        needsSave = true;
-    }
-    EuroBuyRate = EuroMiddleRate + 0.40;
-    EuroSellRate = EuroMiddleRate - 0.40;
-    if(needsSave) SaveEuroExchange();
-    EuroRateTimer = SetTimer("UpdateEuroExchangeRate", (1800 + random(1801)) * 1000, false);
-    return 1;
-}
-
-public UpdateEuroExchangeRate()
-{
-    new Float:change = float(random(31) - 15) / 100.0;
-    EuroMiddleRate += change;
-    if(EuroMiddleRate < EURO_MIN_RATE) EuroMiddleRate = EURO_MIN_RATE;
-    if(EuroMiddleRate > EURO_MAX_RATE) EuroMiddleRate = EURO_MAX_RATE;
-    EuroBuyRate = EuroMiddleRate + 0.40;
-    EuroSellRate = EuroMiddleRate - 0.40;
-    EuroRateChangedAt = gettime();
-    SaveEuroExchange();
-    EuroRateTimer = SetTimer("UpdateEuroExchangeRate", (1800 + random(1801)) * 1000, false);
-    return 1;
-}
-
-stock SaveBusinessMarketVehicle(index)
-{
-    if(index < 0 || index >= MAX_BUSINESS_MARKET_VEHICLES || !BusinessMarketVehicle[index][BmvExists]) return 0;
-    new file[80]; format(file, sizeof(file), "BalkanRP/BusinessVehicleMarket_%d.ini", index);
-    if(!DOF2_FileExists(file)) DOF2_CreateFile(file);
-    DOF2_SetInt(file, "Exists", 1);
-    DOF2_SetInt(file, "MarketId", BusinessMarketVehicle[index][BmvMarketId]);
-    DOF2_SetInt(file, "MarketType", BusinessMarketVehicle[index][BmvMarketType]);
-    DOF2_SetInt(file, "Model", BusinessMarketVehicle[index][BmvModel]);
-    DOF2_SetInt(file, "PriceEuro", BusinessMarketVehicle[index][BmvPriceEuro]);
-    DOF2_SetInt(file, "Color1", BusinessMarketVehicle[index][BmvColor1]);
-    DOF2_SetInt(file, "Color2", BusinessMarketVehicle[index][BmvColor2]);
-    DOF2_SetFloat(file, "X", BusinessMarketVehicle[index][BmvX]);
-    DOF2_SetFloat(file, "Y", BusinessMarketVehicle[index][BmvY]);
-    DOF2_SetFloat(file, "Z", BusinessMarketVehicle[index][BmvZ]);
-    DOF2_SetFloat(file, "A", BusinessMarketVehicle[index][BmvA]);
-    DOF2_SetInt(file, "Interior", BusinessMarketVehicle[index][BmvInterior]);
-    DOF2_SetInt(file, "World", BusinessMarketVehicle[index][BmvWorld]);
-    DOF2_SaveFile();
-    return 1;
-}
-
-stock SpawnBusinessMarketVehicle(index)
-{
-    if(index < 0 || index >= MAX_BUSINESS_MARKET_VEHICLES || !BusinessMarketVehicle[index][BmvExists]) return 0;
-    new oldVehicle = BusinessMarketVehicle[index][BmvVehicleId];
-    if(oldVehicle > 0 && oldVehicle < MAX_VEHICLES && GetVehicleModel(oldVehicle)) DestroyVehicle(oldVehicle);
-    new vehicleid = CreateVehicle(BusinessMarketVehicle[index][BmvModel], BusinessMarketVehicle[index][BmvX],
-        BusinessMarketVehicle[index][BmvY], BusinessMarketVehicle[index][BmvZ], BusinessMarketVehicle[index][BmvA],
-        BusinessMarketVehicle[index][BmvColor1], BusinessMarketVehicle[index][BmvColor2], -1);
-    if(vehicleid <= 0 || vehicleid == INVALID_VEHICLE_ID) return 0;
-    BusinessMarketVehicle[index][BmvVehicleId] = vehicleid;
-    LinkVehicleToInterior(vehicleid, BusinessMarketVehicle[index][BmvInterior]);
-    SetVehicleVirtualWorld(vehicleid, BusinessMarketVehicle[index][BmvWorld]);
-    return vehicleid;
-}
-
-stock LoadBusinessMarketVehicles()
-{
-    new loaded;
-    for(new index = 0; index < MAX_BUSINESS_MARKET_VEHICLES; index++)
-    {
-        new file[80]; format(file, sizeof(file), "BalkanRP/BusinessVehicleMarket_%d.ini", index);
-        BusinessMarketVehicle[index][BmvExists] = false;
-        BusinessMarketVehicle[index][BmvVehicleId] = 0;
-        if(!DOF2_FileExists(file) || DOF2_GetInt(file, "Exists") != 1) continue;
-        BusinessMarketVehicle[index][BmvExists] = true;
-        BusinessMarketVehicle[index][BmvMarketId] = DOF2_GetInt(file, "MarketId");
-        BusinessMarketVehicle[index][BmvMarketType] = DOF2_GetInt(file, "MarketType");
-        BusinessMarketVehicle[index][BmvModel] = DOF2_GetInt(file, "Model");
-        BusinessMarketVehicle[index][BmvPriceEuro] = DOF2_GetInt(file, "PriceEuro");
-        BusinessMarketVehicle[index][BmvColor1] = DOF2_GetInt(file, "Color1");
-        BusinessMarketVehicle[index][BmvColor2] = DOF2_GetInt(file, "Color2");
-        BusinessMarketVehicle[index][BmvX] = DOF2_GetFloat(file, "X");
-        BusinessMarketVehicle[index][BmvY] = DOF2_GetFloat(file, "Y");
-        BusinessMarketVehicle[index][BmvZ] = DOF2_GetFloat(file, "Z");
-        BusinessMarketVehicle[index][BmvA] = DOF2_GetFloat(file, "A");
-        BusinessMarketVehicle[index][BmvInterior] = DOF2_GetInt(file, "Interior");
-        BusinessMarketVehicle[index][BmvWorld] = DOF2_GetInt(file, "World");
-        if(BusinessMarketVehicle[index][BmvModel] < 400 || BusinessMarketVehicle[index][BmvModel] > 611 ||
-           BusinessMarketVehicle[index][BmvPriceEuro] < 1)
-        {
-            BusinessMarketVehicle[index][BmvExists] = false;
-            continue;
-        }
-        SpawnBusinessMarketVehicle(index); loaded++;
-    }
-    if(!loaded)
-    {
-        BusinessMarketVehicle[0][BmvExists] = true;
-        BusinessMarketVehicle[0][BmvMarketId] = 1;
-        BusinessMarketVehicle[0][BmvMarketType] = BUSINESS_VEHICLE_MARKET_BOAT;
-        BusinessMarketVehicle[0][BmvModel] = FISHING_BOAT_MODEL;
-        BusinessMarketVehicle[0][BmvPriceEuro] = FISHING_BOAT_PRICE_EURO;
-        BusinessMarketVehicle[0][BmvColor1] = 56;
-        BusinessMarketVehicle[0][BmvColor2] = 56;
-        BusinessMarketVehicle[0][BmvX] = 445.5000;
-        BusinessMarketVehicle[0][BmvY] = -2100.0000;
-        BusinessMarketVehicle[0][BmvZ] = -0.2500;
-        BusinessMarketVehicle[0][BmvA] = 180.0;
-        BusinessMarketVehicle[0][BmvInterior] = 0;
-        BusinessMarketVehicle[0][BmvWorld] = 0;
-        SaveBusinessMarketVehicle(0);
-        SpawnBusinessMarketVehicle(0);
-    }
-    return 1;
-}
-
-stock GetBusinessMarketVehicleIndex(vehicleid)
-{
-    if(vehicleid <= 0) return -1;
-    for(new index = 0; index < MAX_BUSINESS_MARKET_VEHICLES; index++)
-        if(BusinessMarketVehicle[index][BmvExists] && BusinessMarketVehicle[index][BmvVehicleId] == vehicleid) return index;
-    return -1;
-}
-
-stock SavePlayerEuro(playerid)
-{
-    new file[128];
-    if(!GetPlayerAccountPath(playerid, file, sizeof(file))) return 0;
-    DOF2_SetInt(file, "Euro", PlayerInfo[playerid][pEuro]);
-    DOF2_SaveFile();
-    UpdateRevolutionHudData(playerid);
-    return 1;
-}
-
-CMD:kupieuro(playerid, params[])
-{
-    #pragma unused params
-    if(GetPlayerInterior(playerid) != 0 || GetPlayerVirtualWorld(playerid) != 0 ||
-       !IsPlayerInRangeOfPoint(playerid, 3.0, 1296.47155761, -947.83880615, 41.87200164))
-        return SendClientMessage(playerid, 0xFF7777FF, "[MJENJACNICA]: Morate biti na mjestu za kupovinu eura.");
-    ShowPlayerDialog(playerid, DIALOG_BUY_EURO, DIALOG_STYLE_INPUT, "Kupovina EUR",
-        "{FFFFFF}Unesite koliko EUR zelite kupiti.", "Kupi", "Odustani");
-    return 1;
-}
-
-CMD:prodajeuro(playerid, params[])
-{
-    #pragma unused params
-    if(GetPlayerInterior(playerid) != 0 || GetPlayerVirtualWorld(playerid) != 0 ||
-       !IsPlayerInRangeOfPoint(playerid, 3.0, 1293.39404296, -948.07995605, 41.87200164))
-        return SendClientMessage(playerid, 0xFF7777FF, "[MJENJACNICA]: Morate biti na mjestu za prodaju eura.");
-    ShowPlayerDialog(playerid, DIALOG_SELL_EURO, DIALOG_STYLE_INPUT, "Prodaja EUR",
-        "{FFFFFF}Unesite koliko EUR zelite prodati.", "Prodaj", "Odustani");
-    return 1;
-}
-
-CMD:kursnalista(playerid, params[])
-{
-    #pragma unused params
-    if(GetPlayerInterior(playerid) != 0 || GetPlayerVirtualWorld(playerid) != 0 ||
-       !IsPlayerInRangeOfPoint(playerid, 3.0, 1290.48583984, -948.20397949, 41.87200164))
-        return SendClientMessage(playerid, 0xFF7777FF, "[MJENJACNICA]: Morate biti kod kursne liste.");
-    new changed[32], text[256];
-    if(DOF2_FileExists(EURO_EXCHANGE_FILE) && DOF2_IsSet(EURO_EXCHANGE_FILE, "ChangedText"))
-        format(changed, sizeof(changed), "%s", DOF2_GetString(EURO_EXCHANGE_FILE, "ChangedText"));
-    else format(changed, sizeof(changed), "N/A");
-    format(text, sizeof(text), "{FFFFFF}Kupovina EUR: {00FF00}1 EUR = %.2f DIN\n{FFFFFF}Prodaja EUR: {00FF00}1 EUR = %.2f DIN\n\n{FFFFFF}Posljednja promjena: {FFFF00}%s", EuroBuyRate, EuroSellRate, changed);
-    ShowPlayerDialog(playerid, DIALOG_EURO_RATES, DIALOG_STYLE_MSGBOX, "Kursna lista", text, "Zatvori", "");
-    return 1;
-}
-
 public OnGameModeInit()
 {
     // Health sada kontrolise HealthSystemTick: zdravi -1/10 min, bolesni -2/min.
@@ -1908,8 +1644,6 @@ public OnGameModeInit()
     SetTimer("JuniorAdminTick", 1000, true);
     SetTimer("HealthSystemTick", 60000, true);
     SetTimer("BusinessInvoiceTick", 3600000, true);
-    LoadEuroExchange();
-    LoadBusinessMarketVehicles();
     OffshoreFishingZone = GangZoneCreate(OFFSHORE_MIN_X, OFFSHORE_MIN_Y, OFFSHORE_MAX_X, OFFSHORE_MAX_Y);
     if(DOF2_FileExists(STATS_SETTINGS_FILE))
     {
@@ -2239,12 +1973,8 @@ public OnGameModeInit()
     CreatePickup(1239, 1, 386.52, 173.63, 1008.38, 0);
     Create3DTextLabel("Izlaz\n{FFFFFF}Pritisnite {FFFF00}'F' {FFFFFF}da izadete", 0x00BFFFFF, 386.52, 173.63, 1008.38 + 0.5, 15.0, 0, 0);
 
-    Create3DTextLabel("{FFFF00}MJENJACNICA\n{FFFFFF}Da prodate EURO kucajte {00FF00}/prodajeuro", 0xFFFFFFFF, 1293.39404296, -948.07995605, 41.87200164, 20.0, 0, 0);
-    Create3DTextLabel("{FFFF00}MJENJACNICA\n{FFFFFF}Da kupite EURO kucajte {00FF00}/kupieuro", 0xFFFFFFFF, 1296.47155761, -947.83880615, 41.87200164, 20.0, 0, 0);
-    Create3DTextLabel("{FFFF00}KURSNA LISTA\n{FFFFFF}Da provjerite cenu prodaje/kupovine EURA kucajte {00FF00}/kursnalista", 0xFFFFFFFF, 1290.48583984, -948.20397949, 41.87200164, 20.0, 0, 0);
-
 	// Ubaci ovo unutar public OnGameModeInit()
-	Create3DTextLabel("{FFFF00}Parking Servis\n{FFFFFF}/preuzmivozilo - zatim pritisnite {00FF00}H {FFFFFF}u vozilu", 0xFFFFFFFF, 1019.4164, -927.8874, 42.1797, 20.0, 0, 0);
+	Create3DTextLabel("{FFFF00}Parking Servis\n{FFFFFF}Da preuzmete vozilo kucajte {00FF00}/preuzmivozilo", 0xFFFFFFFF, 1019.4164, -927.8874, 42.1797, 20.0, 0, 0);
 	
 	// 3D Text spolja na ulazu u policiju
 	Create3DTextLabel("Beogradska Policija\nPritisnite 'F' da udete", 0x33CCFFFF, 1555.1368, -1675.6598, 16.1953, 20.0, 0, 0);
@@ -2298,13 +2028,6 @@ public OnPlayerConnect(playerid)
     PendingBizzSeller[playerid] = INVALID_PLAYER_ID;
     PendingBizzId[playerid] = -1;
     PendingBizzPrice[playerid] = 0;
-    PendingBusinessVehiclePurchase[playerid] = -1;
-    PendingBusinessVehicleModel[playerid] = 0;
-    PendingBusinessVehicleColor1[playerid] = 0;
-    PendingBusinessVehicleColor2[playerid] = 0;
-    PendingBusinessMarketVehicle[playerid] = -1;
-    PendingBusinessMarketVehicleId[playerid] = INVALID_VEHICLE_ID;
-    PlayerInfo[playerid][pEuro] = 0;
     new connectDutyFile[128], connectDutyName[MAX_PLAYER_NAME];
     GetPlayerName(playerid, connectDutyName, sizeof(connectDutyName));
     format(connectDutyFile, sizeof(connectDutyFile), "Korisnici/%s.ini", connectDutyName);
@@ -2542,7 +2265,6 @@ public OnPlayerDisconnect(playerid, reason)
         if(GetPVarInt(playerid, "BR_LoggedIn"))
         {
             DOF2_SetInt(file, "Novac", GetPlayerMoney(playerid));
-            DOF2_SetInt(file, "Euro", PlayerInfo[playerid][pEuro]);
             DOF2_SetInt(file, "DosijeWanted", WantedPoints[playerid]);
             DOF2_SetString(file, "DosijeRazlog", WantedReason[playerid]);
             DOF2_SetInt(file, "MinuteIgranja", PlayerMinute[playerid]);
@@ -2725,8 +2447,7 @@ public OnPlayerSpawn(playerid)
 
     ClearAnimations(playerid);
 
-    if(IntroKorak[playerid] > 0 && IntroKorak[playerid] < 13) HideRevolutionHud(playerid);
-    else ShowRevolutionHud(playerid);
+    ShowRevolutionHud(playerid);
 
     if(IntroKorak[playerid] == 0)
     {
@@ -2799,29 +2520,18 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
     {
         case DIALOG_CREATE_JOB_BUSINESS:
         {
-            if(!response)
-            {
-                PendingBusinessCreateType[playerid] = BIZ_TYPE_NONE;
-                PendingBusinessCreatePrice[playerid] = 0;
-                PendingBusinessCreateLevel[playerid] = 0;
-                PendingBusinessCreateName[playerid][0] = EOS;
-                return 1;
-            }
+            if(!response) return 1;
             new jobid = listitem + 1;
             if(jobid < JOB_CISTAC_ULICA || jobid > JOB_RIBOLOVAC || PendingBusinessCreateType[playerid] != BIZ_TYPE_JOB) return 1;
-            new businessName[32], price = PendingBusinessCreatePrice[playerid], level = PendingBusinessCreateLevel[playerid];
-            format(businessName, sizeof(businessName), "%s", PendingBusinessCreateName[playerid]);
-            PendingBusinessCreateType[playerid] = BIZ_TYPE_NONE;
-            PendingBusinessCreatePrice[playerid] = 0;
-            PendingBusinessCreateLevel[playerid] = 0;
-            PendingBusinessCreateName[playerid][0] = EOS;
-            new businessid = CreateBusinessAtPlayer(playerid, BIZ_TYPE_JOB, jobid, businessName, price, level);
+            new businessid = CreateBusinessAtPlayer(playerid, BIZ_TYPE_JOB, jobid, PendingBusinessCreateName[playerid],
+                PendingBusinessCreatePrice[playerid], PendingBusinessCreateLevel[playerid]);
             if(businessid == -2) return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Za izabrani posao vec postoji biznis.");
             if(businessid < 0) return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Nema slobodnog mjesta za novi biznis.");
             new jobName[32], message[160];
             GetJobName(jobid, jobName, sizeof(jobName));
-            format(message, sizeof(message), "Kreiran je job biznis '%s' (ID %d) za posao %s.", businessName, businessid, jobName);
+            format(message, sizeof(message), "Kreiran je job biznis '%s' (ID %d) za posao %s.", PendingBusinessCreateName[playerid], businessid, jobName);
             SendClientMessage(playerid, 0x00BFFFFF, message);
+            PendingBusinessCreateType[playerid] = BIZ_TYPE_NONE;
             return 1;
         }
         case DIALOG_COOWNER_OFFER:
@@ -2865,74 +2575,6 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
             SendClientMessage(playerid, 0x00FF00FF, "[BIZNIS]: Postali ste suvlasnik biznisa.");
             SendClientMessage(ownerid, 0x00FF00FF, "[BIZNIS]: Igrac je prihvatio ponudu za suvlasnika.");
             return 1;
-        }
-        case DIALOG_BUSINESS_VEHICLE_BUY:
-        {
-            new businessid = PendingBusinessVehiclePurchase[playerid];
-            new marketIndex = PendingBusinessMarketVehicle[playerid];
-            new marketVehicleId = PendingBusinessMarketVehicleId[playerid];
-            PendingBusinessVehiclePurchase[playerid] = -1;
-            PendingBusinessVehicleModel[playerid] = 0;
-            PendingBusinessVehicleColor1[playerid] = 0;
-            PendingBusinessVehicleColor2[playerid] = 0;
-            PendingBusinessMarketVehicle[playerid] = -1;
-            PendingBusinessMarketVehicleId[playerid] = INVALID_VEHICLE_ID;
-            if(!response) return 1;
-            return CompleteBusinessVehiclePurchase(playerid, businessid, marketIndex, marketVehicleId);
-        }
-        case DIALOG_BUY_EURO:
-        {
-            if(!response) return 1;
-            if(GetPlayerInterior(playerid) != 0 || GetPlayerVirtualWorld(playerid) != 0 ||
-               !IsPlayerInRangeOfPoint(playerid, 3.0, 1296.47155761, -947.83880615, 41.87200164))
-                return SendClientMessage(playerid, 0xFF7777FF, "[MJENJACNICA]: Udaljili ste se od mjesta za kupovinu eura.");
-            new amount;
-            if(!ParsePositiveBusinessAmount(inputtext, amount) || amount > MAX_EURO_BALANCE || PlayerInfo[playerid][pEuro] > MAX_EURO_BALANCE - amount)
-                return SendClientMessage(playerid, 0xFF7777FF, "[MJENJACNICA]: Unesite ispravnu kolicinu EUR.");
-            new Float:rawCost = float(amount) * EuroBuyRate;
-            if(rawCost < 1.0 || rawCost > float(MAX_MONEY_VALUE))
-                return SendClientMessage(playerid, 0xFF7777FF, "[MJENJACNICA]: Iznos je prevelik.");
-            new cost = floatround(rawCost, floatround_ceil);
-            if(GetPlayerMoney(playerid) < cost)
-                return SendClientMessage(playerid, 0xFF7777FF, "[MJENJACNICA]: Nemate dovoljno DIN za kupovinu te kolicine EUR.");
-            new account[128];
-            if(!GetPlayerAccountPath(playerid, account, sizeof(account)))
-                return SendClientMessage(playerid, 0xFF7777FF, "[MJENJACNICA]: Korisnicki racun nije dostupan.");
-            GivePlayerMoney(playerid, -cost);
-            PlayerInfo[playerid][pNovac] = GetPlayerMoney(playerid);
-            PlayerInfo[playerid][pEuro] += amount;
-            DOF2_SetInt(account, "Novac", PlayerInfo[playerid][pNovac]);
-            DOF2_SetInt(account, "Euro", PlayerInfo[playerid][pEuro]);
-            DOF2_SaveFile(); UpdateRevolutionHudData(playerid);
-            new message[144]; format(message, sizeof(message), "[MJENJACNICA]: Kupili ste %d EUR za %d DIN.", amount, cost);
-            return SendClientMessage(playerid, 0x00FF00FF, message);
-        }
-        case DIALOG_SELL_EURO:
-        {
-            if(!response) return 1;
-            if(GetPlayerInterior(playerid) != 0 || GetPlayerVirtualWorld(playerid) != 0 ||
-               !IsPlayerInRangeOfPoint(playerid, 3.0, 1293.39404296, -948.07995605, 41.87200164))
-                return SendClientMessage(playerid, 0xFF7777FF, "[MJENJACNICA]: Udaljili ste se od mjesta za prodaju eura.");
-            new amount;
-            if(!ParsePositiveBusinessAmount(inputtext, amount) || amount > PlayerInfo[playerid][pEuro])
-                return SendClientMessage(playerid, 0xFF7777FF, "[MJENJACNICA]: Nemate toliko EUR.");
-            new Float:rawPayout = float(amount) * EuroSellRate;
-            if(rawPayout < 1.0 || rawPayout > float(MAX_MONEY_VALUE))
-                return SendClientMessage(playerid, 0xFF7777FF, "[MJENJACNICA]: Iznos je prevelik.");
-            new payout = floatround(rawPayout, floatround_floor);
-            if(GetPlayerMoney(playerid) > MAX_MONEY_VALUE - payout)
-                return SendClientMessage(playerid, 0xFF7777FF, "[MJENJACNICA]: Transakcija bi prekoracila dozvoljeni iznos novca.");
-            new account[128];
-            if(!GetPlayerAccountPath(playerid, account, sizeof(account)))
-                return SendClientMessage(playerid, 0xFF7777FF, "[MJENJACNICA]: Korisnicki racun nije dostupan.");
-            PlayerInfo[playerid][pEuro] -= amount;
-            GivePlayerMoney(playerid, payout);
-            PlayerInfo[playerid][pNovac] = GetPlayerMoney(playerid);
-            DOF2_SetInt(account, "Novac", PlayerInfo[playerid][pNovac]);
-            DOF2_SetInt(account, "Euro", PlayerInfo[playerid][pEuro]);
-            DOF2_SaveFile(); UpdateRevolutionHudData(playerid);
-            new message[144]; format(message, sizeof(message), "[MJENJACNICA]: Prodali ste %d EUR i dobili %d DIN.", amount, payout);
-            return SendClientMessage(playerid, 0x00FF00FF, message);
         }
         case DIALOG_BUY_INVOICES:
         {
@@ -3165,9 +2807,10 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
             if(id<0||id>=MAX_MARKETA||GetOwnedBusinessId(playerid)!=id||!IsAtOwnedBusiness(playerid,id))return SendClientMessage(playerid,0xFF0000FF,"GRESKA: Morate biti kod svog biznisa.");
             new refund=MarketInfo[id][mCena]/2,file[128];
             if(!GetPlayerAccountPath(playerid,file,sizeof(file))) return SendClientMessage(playerid,0xFF7777FF,"GRESKA: Korisnicki racun nije dostupan.");
-            if(refund<0||PlayerInfo[playerid][pEuro]>MAX_EURO_BALANCE-refund)return SendClientMessage(playerid,0xFF7777FF,"GRESKA: Ne mozete primiti vise eura.");
-            PlayerInfo[playerid][pEuro] += refund;
-            DOF2_SetInt(file,"Euro",PlayerInfo[playerid][pEuro]); PlayerInfo[playerid][pBizz]=-1;
+            new euro=DOF2_IsSet(file,"Euro")?DOF2_GetInt(file,"Euro"):0;
+            if(euro<0)euro=0;
+            if(refund<0||euro>MAX_MONEY_VALUE-refund)return SendClientMessage(playerid,0xFF7777FF,"GRESKA: Ne mozete primiti vise eura.");
+            DOF2_SetInt(file,"Euro",euro+refund); PlayerInfo[playerid][pBizz]=-1;
             DOF2_SetInt(file,"Bizz",-1);
             MarketInfo[id][mOwned]=0; MarketInfo[id][mFakture]=0; format(MarketInfo[id][mOwner],MAX_PLAYER_NAME,"Nitko"); format(BusinessCoOwner[id],MAX_PLAYER_NAME,"Nema"); DestroyBusinessVehicle(id,true); SaveMarket(id); UpdateMarketCP(id); DOF2_SaveFile();
             UpdateRevolutionHudData(playerid);
@@ -3184,11 +2827,12 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
             GetPlayerName(playerid,buyerName,sizeof(buyerName)); GetPlayerName(seller,sellerName,sizeof(sellerName));
             if(!GetPlayerAccountPath(playerid,buyerFile,sizeof(buyerFile))||!GetPlayerAccountPath(seller,sellerFile,sizeof(sellerFile)))return SendClientMessage(playerid,0xFF0000FF,"GRESKA: Korisnicki racun nije dostupan.");
             if(DOF2_GetInt(buyerFile,"Level")<MarketInfo[id][mLevel])return SendClientMessage(playerid,0xFF0000FF,"GRESKA: Nemate potreban level za ovaj biznis.");
-            if(PlayerInfo[playerid][pEuro]<price)return SendClientMessage(playerid,0xFF0000FF,"GRESKA: Nemate dovoljno eura.");
-            if(price<1||PlayerInfo[seller][pEuro]>MAX_EURO_BALANCE-price)return SendClientMessage(playerid,0xFF0000FF,"GRESKA: Prodavac ne moze primiti vise eura.");
-            PlayerInfo[playerid][pEuro] -= price; PlayerInfo[seller][pEuro] += price;
+            new buyerEuro=DOF2_IsSet(buyerFile,"Euro")?DOF2_GetInt(buyerFile,"Euro"):0, sellerEuro=DOF2_IsSet(sellerFile,"Euro")?DOF2_GetInt(sellerFile,"Euro"):0;
+            if(buyerEuro<price)return SendClientMessage(playerid,0xFF0000FF,"GRESKA: Nemate dovoljno eura.");
+            if(sellerEuro<0)sellerEuro=0;
+            if(price<1||sellerEuro>MAX_MONEY_VALUE-price)return SendClientMessage(playerid,0xFF0000FF,"GRESKA: Prodavac ne moze primiti vise eura.");
             PlayerInfo[playerid][pBizz]=id; PlayerInfo[seller][pBizz]=-1;
-            DOF2_SetInt(buyerFile,"Bizz",id); DOF2_SetInt(buyerFile,"Euro",PlayerInfo[playerid][pEuro]); DOF2_SetInt(sellerFile,"Bizz",-1); DOF2_SetInt(sellerFile,"Euro",PlayerInfo[seller][pEuro]);
+            DOF2_SetInt(buyerFile,"Bizz",id); DOF2_SetInt(buyerFile,"Euro",buyerEuro-price); DOF2_SetInt(sellerFile,"Bizz",-1); DOF2_SetInt(sellerFile,"Euro",sellerEuro+price);
             MarketInfo[id][mOwned]=1; format(MarketInfo[id][mOwner],MAX_PLAYER_NAME,"%s",buyerName); format(BusinessCoOwner[id],MAX_PLAYER_NAME,"Nema"); SaveMarket(id); UpdateMarketCP(id); DOF2_SaveFile();
             UpdateRevolutionHudData(playerid); UpdateRevolutionHudData(seller);
             SendClientMessage(playerid,0x00FF00FF,"[BIZNIS]: Kupili ste biznis od igraca."); SendClientMessage(seller,0x00FF00FF,"[BIZNIS]: Prodali ste biznis igracu."); return 1;
@@ -3310,10 +2954,7 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
                 DOF2_SetInt(STATS_SETTINGS_FILE, "HappyJobId", HappyJobId);
                 DOF2_SaveFile();
                 UpdateHudTip(0);
-                new adminName[MAX_PLAYER_NAME], message[144];
-                GetPlayerName(playerid, adminName, sizeof(adminName));
-                format(message, sizeof(message), "[HAPPYJOB]: Admin %s je ugasio HappyJob.", adminName);
-                SendClientMessageToAll(0xFFD700FF, message);
+                SendClientMessageToAll(0xFFD700FF, "[HAPPY JOB]: Happy Job je ugasen.");
                 return 1;
             }
 
@@ -3323,10 +2964,9 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
             DOF2_SetInt(STATS_SETTINGS_FILE, "HappyJobId", HappyJobId);
             DOF2_SaveFile();
             UpdateHudTip(0);
-            new jobName[32], adminName[MAX_PLAYER_NAME], message[160];
+            new jobName[32], message[128];
             GetJobName(HappyJobId, jobName, sizeof(jobName));
-            GetPlayerName(playerid, adminName, sizeof(adminName));
-            format(message, sizeof(message), "[HAPPYJOB]: Admin %s je ukljucio HappyJob za Posao: %s.", adminName, jobName);
+            format(message, sizeof(message), "[HAPPY JOB]: 2x %s je ukljucen.", jobName);
             SendClientMessageToAll(0xFFD700FF, message);
             return 1;
         }
@@ -3500,7 +3140,6 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
                     GivePlayerMoney(playerid, DOF2_GetInt(file, "Novac"));
                     PlayerZlato[playerid] = DOF2_GetInt(file, "Zlato");
                     IgracKrediti[playerid] = DOF2_GetInt(file, "Krediti");
-                    PlayerInfo[playerid][pEuro] = DOF2_IsSet(file, "Euro") ? DOF2_GetInt(file, "Euro") : 0;
                     UpdateZlatoTD(playerid);
                     UpdateBankaTD(playerid, DOF2_GetInt(file, "Banka"));
                     PlayerTextDrawShow(playerid, TD_Grad[playerid]);
@@ -3565,7 +3204,6 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
             DOF2_SetInt(file, "Banka", 0);
             DOF2_SetInt(file, "BankovniRacun", 0);
             DOF2_SetInt(file, "Euro", 0);
-            PlayerInfo[playerid][pEuro] = 0;
             DOF2_SetInt(file, "Zlato", 0);
             DOF2_SetInt(file, "Krediti", 0);
             DOF2_SetInt(file, "Respekti", 0);
@@ -3703,7 +3341,6 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
                     GivePlayerMoney(playerid, DOF2_GetInt(file, "Novac"));
                     PlayerZlato[playerid] = DOF2_GetInt(file, "Zlato");
                     IgracKrediti[playerid] = DOF2_GetInt(file, "Krediti");
-                    PlayerInfo[playerid][pEuro] = DOF2_IsSet(file, "Euro") ? DOF2_GetInt(file, "Euro") : 0;
                     UpdateZlatoTD(playerid);
                     UpdateBankaTD(playerid, DOF2_GetInt(file, "Banka"));
                     PlayerTextDrawShow(playerid, TD_Grad[playerid]);
@@ -3743,7 +3380,6 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
                     GivePlayerMoney(playerid, DOF2_GetInt(file, "Novac"));
                     PlayerZlato[playerid] = DOF2_GetInt(file, "Zlato");
                     IgracKrediti[playerid] = DOF2_GetInt(file, "Krediti");
-                    PlayerInfo[playerid][pEuro] = DOF2_IsSet(file, "Euro") ? DOF2_GetInt(file, "Euro") : 0;
                     UpdateZlatoTD(playerid);
                     UpdateBankaTD(playerid, DOF2_GetInt(file, "Banka"));
                     PlayerTextDrawShow(playerid, TD_Grad[playerid]);
@@ -4221,7 +3857,6 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
 stock PokreniIntro(playerid)
 {
     IntroKorak[playerid] = 1;
-    HideRevolutionHud(playerid);
     TogglePlayerSpectating(playerid, 1);
     TimerIntro[playerid] = SetTimerEx("ZavrsiIntroKorak", 6000, true, "i", playerid);
 
@@ -4540,7 +4175,7 @@ CMD:stats(playerid, params[])
     new hours = DOF2_GetInt(file, "Sati");
     new minutes = PlayerMinute[playerid];
     new bank = DOF2_GetInt(file, "Banka");
-    new euro = PlayerInfo[playerid][pEuro];
+    new euro = DOF2_GetInt(file, "Euro");
     new gold = DOF2_GetInt(file, "Zlato");
     new credits = DOF2_GetInt(file, "Krediti");
     new warnings = DOF2_GetInt(file, "Upozorenja");
@@ -6761,7 +6396,7 @@ CMD:jetpack(playerid, params[])
     if(!SetPlayerSpecialAction(playerid, SPECIAL_ACTION_USEJETPACK)) return 1;
     ScriptJetpack[playerid] = true;
     JetpackDropGuardUntil[playerid] = 0;
-    SendClientMessage(playerid, 0xAFAFAFFF, "* Leti kao zmaj");
+    SendClientMessageToAll(0xAFAFAFFF, "* Leti kao zmaj");
     return 1;
 }
 stock FindOwnedHouseByName(const name[])
@@ -6915,14 +6550,6 @@ public OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
         // 1. PROVERA ZA VOZILO ("H" u autu)
         if(IsPlayerInAnyVehicle(playerid) && IsPlayerInRangeOfPoint(playerid, 10.0, 1022.0895, -927.0981, 43.7344))
         {
-            if(GetPVarInt(playerid, "BR_ParkingPickupPaid"))
-            {
-                DeletePVar(playerid, "BR_ParkingPickupPaid");
-                MoveObject(kapija_parking, 1022.08948, -927.09814, 38.39440, 3.0);
-                SetTimer("ZatvoriParkingKapiju", 15000, false);
-                SendClientMessage(playerid, 0x00FF00FF, "[PARKING SERVIS]: Kapija je otvorena i zatvorice se za 15 sekundi.");
-                return 1;
-            }
             new file[128], ime[MAX_PLAYER_NAME];
             GetPlayerName(playerid, ime, sizeof(ime));
             format(file, sizeof(file), "Korisnici/%s.ini", ime);
@@ -7860,8 +7487,6 @@ public UpdateMarketCP(marketid)
         format(line, sizeof(line), "\n{00C0FF}Produkti: {FFFFFF}%d/%d", MarketInfo[marketid][mProizvodi], MAX_BUSINESS_PRODUCTS);
         strcat(string, line, sizeof(string));
     }
-    format(line, sizeof(line), "\n{00C0FF}Fakture: {FFFFFF}%d/%d", MarketInfo[marketid][mFakture], MAX_BUSINESS_INVOICES);
-    strcat(string, line, sizeof(string));
     if(CanBusinessUseEntranceFee(marketid))
     {
         if(MarketInfo[marketid][mUlaznaCena] > 0)
@@ -7907,7 +7532,7 @@ stock CreateBusinessAtPlayer(playerid, type, jobid, const name[], price, level)
     MarketInfo[businessid][mLevel] = level;
     MarketInfo[businessid][mUlaznaCena] = 0;
     MarketInfo[businessid][mBudzet] = 0;
-    MarketInfo[businessid][mProizvodi] = MAX_BUSINESS_PRODUCTS;
+    MarketInfo[businessid][mProizvodi] = CanBusinessUseProducts(businessid) ? 100 : 0;
     MarketInfo[businessid][mCenaProizvoda] = 100;
     MarketInfo[businessid][mBizVehicleModel] = 0;
     MarketInfo[businessid][mBizVehicleId] = 0;
@@ -7946,29 +7571,6 @@ stock CreateBusinessAtPlayer(playerid, type, jobid, const name[], price, level)
     return businessid;
 }
 
-stock ParseCreateBusinessParams(const params[], name[], nameSize, &type, &price, &level)
-{
-    if(!strlen(params)) return 0;
-    new offset;
-    if(params[0] == '[')
-    {
-        new closing = strfind(params, "]", false);
-        if(closing < 2 || closing + 1 >= nameSize) return 0;
-        strmid(name, params, 0, closing + 1, nameSize);
-        offset = closing + 1;
-    }
-    else
-    {
-        new separator = strfind(params, " ", false);
-        if(separator < 1 || separator >= nameSize) return 0;
-        strmid(name, params, 0, separator, nameSize);
-        offset = separator;
-    }
-    while(params[offset] == ' ') offset++;
-    if(!strlen(params[offset])) return 0;
-    return sscanf(params[offset], "iii", type, price, level) == 0;
-}
-
 CMD:napravibizz(playerid, params[])
 {
     new file[128], adminName[MAX_PLAYER_NAME];
@@ -7978,10 +7580,10 @@ CMD:napravibizz(playerid, params[])
     if(!IsPlayerAdmin(playerid) && adminLevel < RANK_VLASNIK)
         return SendClientMessage(playerid, 0xFF0000FF, "GRESKA: Komandu moze koristiti samo Vlasnik.");
 
-    new name[32], type, price, level;
-    if(!ParseCreateBusinessParams(params, name, sizeof(name), type, price, level))
+    new enteredName[32], name[32], type, price, level;
+    if(sscanf(params, "s[32]iii", enteredName, type, price, level))
     {
-        SendClientMessage(playerid, 0x00BFFFFF, "KORISCENJE: {FFFFFF}/napravibizz [Ime biznisa] [ID Biznisa] [Cijena EUR] [Level]");
+        SendClientMessage(playerid, 0x00BFFFFF, "KORISCENJE: {FFFFFF}/napravibizz [Ime biznisa] [ID Biznisa] [Cena] [Level]");
         SendClientMessage(playerid, 0xAFAFAFFF, "ID Biznisa:");
         for(new businessType = BIZ_TYPE_MARKET; businessType <= MAX_BUSINESS_TYPE; businessType++)
         {
@@ -7990,13 +7592,18 @@ CMD:napravibizz(playerid, params[])
             format(line, sizeof(line), "%d. %s", businessType, typeName);
             SendClientMessage(playerid, 0xAFAFAFFF, line);
         }
-        SendClientMessage(playerid, 0xAFAFAFFF, "Primjer: /napravibizz [RIBAR] 2 50000 20");
         return 1;
     }
     if(type < BIZ_TYPE_MARKET || type > MAX_BUSINESS_TYPE)
-        return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Unesite postojeci ID biznisa sa liste.");
+        return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Unesite postojeci ID biznisa sa sive liste.");
     if(price < 1 || level < 1)
-        return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Cijena u eurima i level moraju biti veci od nule.");
+        return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Cijena i level moraju biti veci od nule.");
+
+    new begin = 0, finish = strlen(enteredName);
+    if(finish >= 2 && enteredName[0] == '[' && enteredName[finish - 1] == ']') { begin = 1; finish--; }
+    strmid(name, enteredName, begin, finish, sizeof(name));
+    for(new index = 0; index < strlen(name); index++) if(name[index] == '_') name[index] = ' ';
+    if(!strlen(name)) return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Unesite ispravno ime biznisa.");
 
     if(type == BIZ_TYPE_JOB)
     {
@@ -8011,7 +7618,7 @@ CMD:napravibizz(playerid, params[])
 
     new businessid = CreateBusinessAtPlayer(playerid, type, JOB_NONE, name, price, level);
     if(businessid < 0) return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Nema slobodnog mjesta za novi biznis.");
-    new message[192], typeName[32];
+    new message[160], typeName[32];
     GetBusinessTypeName(type, typeName, sizeof(typeName));
     format(message, sizeof(message), "Kreiran je %s '%s' (ID %d). Cijena: %d EUR | Level: %d.", typeName, name, businessid, price, level);
     SendClientMessage(playerid, 0x00BFFFFF, message);
@@ -8360,6 +7967,12 @@ public BusinessInvoiceTick()
     return 1;
 }
 
+CMD:bizzhelp(playerid, params[])
+{
+    #pragma unused params
+    return ShowBusinessHelp(playerid);
+}
+
 CMD:bizzinfo(playerid, params[])
 {
     #pragma unused params
@@ -8587,148 +8200,55 @@ stock bool:CanBusinessOwnVehicleModel(businessid, modelid)
     return false;
 }
 
-stock bool:IsBusinessBoatModel(modelid)
-{
-    switch(modelid)
-    {
-        case 430, 446, 452, 453, 454, 472, 473, 484, 493, 595: return true;
-    }
-    return false;
-}
-
-stock bool:IsBusinessMotorcycleModel(modelid)
-{
-    switch(modelid)
-    {
-        case 448, 461, 462, 463, 468, 471, 481, 509, 510, 521, 522, 523, 581, 586: return true;
-    }
-    return false;
-}
-
-stock bool:IsAtBusinessVehicleMarket(playerid, modelid)
-{
-    if(GetPlayerInterior(playerid) != 0 || GetPlayerVirtualWorld(playerid) != 0) return false;
-    if(IsBusinessBoatModel(modelid))
-    {
-        // Pijaca brodova obuhvata dok uz pet definisanih slotova za brodove.
-        return IsPlayerInRangeOfPoint(playerid, 55.0, 429.2695, -2100.0222, 0.0) != 0;
-    }
-    if(IsBusinessMotorcycleModel(modelid))
-        return IsPlayerInRangeOfPoint(playerid, 50.0, 1095.0, -1765.0, 13.4) != 0;
-    if(IsPlayerInRangeOfPoint(playerid, 50.0, 1127.0, -1439.2, 15.8)) return true;
-    if(IsPlayerInRangeOfPoint(playerid, 50.0, -1954.0, 287.0, 35.5)) return true;
-    if(IsPlayerInRangeOfPoint(playerid, 50.0, 2131.0, 1405.0, 10.8)) return true;
-    return false;
-}
-
-stock CompleteBusinessVehiclePurchase(playerid, businessid, marketIndex, marketVehicleId)
-{
-    if(businessid < 0 || businessid >= MAX_MARKETA || !CanManageBusiness(playerid, businessid))
-        return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Vise ne upravljate tim biznisom.");
-    if(marketIndex < 0 || marketIndex >= MAX_BUSINESS_MARKET_VEHICLES || !BusinessMarketVehicle[marketIndex][BmvExists] ||
-       BusinessMarketVehicle[marketIndex][BmvVehicleId] != marketVehicleId || GetVehicleModel(marketVehicleId) != BusinessMarketVehicle[marketIndex][BmvModel])
-        return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Vozilo sa pijace vise nije dostupno.");
-    if(GetPlayerState(playerid) != PLAYER_STATE_DRIVER || GetPlayerVehicleID(playerid) != marketVehicleId ||
-       GetPlayerInterior(playerid) != BusinessMarketVehicle[marketIndex][BmvInterior] ||
-       GetPlayerVirtualWorld(playerid) != BusinessMarketVehicle[marketIndex][BmvWorld])
-        return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Morate ostati vozac odabranog vozila na pijaci.");
-    if(!IsPlayerInRangeOfPoint(playerid, 8.0, BusinessMarketVehicle[marketIndex][BmvX], BusinessMarketVehicle[marketIndex][BmvY], BusinessMarketVehicle[marketIndex][BmvZ]))
-        return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Prodajno vozilo mora biti na svom mjestu na pijaci.");
-    new modelid = BusinessMarketVehicle[marketIndex][BmvModel];
-    if(!CanBusinessOwnVehicleModel(businessid, modelid))
-        return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Vas posao ne moze kupiti taj model vozila.");
-    new slot = GetFreeBusinessVehicleSlot(businessid);
-    if(slot == -1) return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Vas biznis vec ima maksimalnih 5 firmnih vozila.");
-    new priceEuro = BusinessMarketVehicle[marketIndex][BmvPriceEuro];
-    if(priceEuro < 1 || PlayerInfo[playerid][pEuro] < priceEuro)
-    {
-        new error[128]; format(error, sizeof(error), "[BIZNIS]: Nemate dovoljno EUR. Potrebno vam je %d EUR.", priceEuro);
-        return SendClientMessage(playerid, 0xFF7777FF, error);
-    }
-    new account[128];
-    if(!GetPlayerAccountPath(playerid, account, sizeof(account)))
-        return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Korisnicki racun nije dostupan.");
-
-    BusinessVehicleModel[businessid][slot] = modelid;
-    BusinessVehicleRentPrice[businessid][slot] = 5000;
-    BusinessVehicleRentMinutes[businessid][slot] = 20;
-    if(IsFishingBusiness(businessid))
-    {
-        BusinessVehicleColor1[businessid][slot] = 56;
-        BusinessVehicleColor2[businessid][slot] = 56;
-        BusinessVehicleX[businessid][slot] = FishingBoatSlotPos[slot][0];
-        BusinessVehicleY[businessid][slot] = FishingBoatSlotPos[slot][1];
-        BusinessVehicleZ[businessid][slot] = FishingBoatSlotPos[slot][2];
-        BusinessVehicleA[businessid][slot] = FishingBoatSlotPos[slot][3];
-    }
-    else
-    {
-        BusinessVehicleColor1[businessid][slot] = BusinessMarketVehicle[marketIndex][BmvColor1];
-        BusinessVehicleColor2[businessid][slot] = BusinessMarketVehicle[marketIndex][BmvColor2];
-        BusinessVehicleX[businessid][slot] = MarketInfo[businessid][mEntranceX] + 3.0;
-        BusinessVehicleY[businessid][slot] = MarketInfo[businessid][mEntranceY];
-        BusinessVehicleZ[businessid][slot] = MarketInfo[businessid][mEntranceZ];
-        BusinessVehicleA[businessid][slot] = 0.0;
-    }
-    if(!LoadBusinessVehicleSlot(businessid, slot))
-    {
-        BusinessVehicleModel[businessid][slot] = 0;
-        return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Vozilo trenutno nije moguce kreirati. EUR nije oduzet.");
-    }
-    PlayerInfo[playerid][pEuro] -= priceEuro;
-    DOF2_SetInt(account, "Euro", PlayerInfo[playerid][pEuro]);
-    SaveMarket(businessid);
-    DOF2_SaveFile();
-    UpdateRevolutionHudData(playerid);
-    new message[144];
-    format(message, sizeof(message), "[BIZNIS]: Kupljeno je firmino vozilo model %d (#%d) za %d EUR.", modelid, slot + 1, priceEuro);
-    return SendClientMessage(playerid, 0x00FF00FF, message);
-}
-
 CMD:ob(playerid, params[])
 {
     new id = GetManagedBusinessId(playerid), action[16];
     if(id == -1) return SendClientMessage(playerid, 0xFF0000FF, "GRESKA: Ne posjedujete biznis.");
+    if(!CanManageBusinessHere(playerid,id)) return SendClientMessage(playerid,0xFF7777FF,"[BIZNIS]: Morate biti u blizini svog biznisa.");
     if(sscanf(params, "s[16]", action)) return SendClientMessage(playerid, -1, "KORISCENJE: /ob [buy/sell/park/sellcar]");
 
     if(!strcmp(action, "buy", true))
     {
-        if(GetPlayerState(playerid) != PLAYER_STATE_DRIVER)
-            return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Morate sjediti kao vozac u vozilu koje se prodaje na pijaci.");
-        new marketVehicleId = GetPlayerVehicleID(playerid);
-        new marketIndex = GetBusinessMarketVehicleIndex(marketVehicleId);
-        if(marketIndex == -1)
-            return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Ovo vozilo ne pripada pijaci poslovnih vozila.");
-        if(GetPlayerInterior(playerid) != BusinessMarketVehicle[marketIndex][BmvInterior] ||
-           GetPlayerVirtualWorld(playerid) != BusinessMarketVehicle[marketIndex][BmvWorld])
-            return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Vozilo nije u odgovarajucoj pijaci.");
-        if(!IsPlayerInRangeOfPoint(playerid, 8.0, BusinessMarketVehicle[marketIndex][BmvX], BusinessMarketVehicle[marketIndex][BmvY], BusinessMarketVehicle[marketIndex][BmvZ]))
-            return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Vratite prodajno vozilo na njegovo mjesto na pijaci.");
-        new model = BusinessMarketVehicle[marketIndex][BmvModel];
+        new model, c1, c2, dummy[16];
+        if(sscanf(params, "s[16]iii", dummy, model, c1, c2))
+            return SendClientMessage(playerid, -1, "KORISCENJE: /ob buy [Model ID] [Boja 1] [Boja 2]");
+        if(model < 400 || model > 611)
+            return SendClientMessage(playerid, 0xFF0000FF, "GRESKA: Model vozila mora biti 400-611.");
         if(!CanBusinessOwnVehicleModel(id, model))
-            return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Vas posao ne moze kupiti taj model vozila.");
-        if(GetFreeBusinessVehicleSlot(id) == -1)
+            return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Ribarski biznis trenutno moze kupiti samo brod model ID 453.");
+        new slot = GetFreeBusinessVehicleSlot(id);
+        if(slot == -1)
             return SendClientMessage(playerid, 0xFF7777FF, "[BIZNIS]: Vas biznis vec ima maksimalnih 5 firmnih vozila.");
-        new priceEuro = BusinessMarketVehicle[marketIndex][BmvPriceEuro];
-        if(PlayerInfo[playerid][pEuro] < priceEuro)
+        if(MarketInfo[id][mBudzet] < FISHING_BOAT_PRICE)
+            return SendClientMessage(playerid, 0xFF0000FF, "GRESKA: U budzetu biznisa je potrebno 100000 RSD.");
+
+        MarketInfo[id][mBudzet] -= FISHING_BOAT_PRICE;
+        BusinessVehicleModel[id][slot] = model;
+        BusinessVehicleRentPrice[id][slot] = 5000;
+        BusinessVehicleRentMinutes[id][slot] = 20;
+        if(IsFishingBusiness(id))
         {
-            new error[128]; format(error, sizeof(error), "[BIZNIS]: Nemate dovoljno EUR. Potrebno vam je %d EUR.", priceEuro);
-            return SendClientMessage(playerid, 0xFF7777FF, error);
+            BusinessVehicleColor1[id][slot] = 56;
+            BusinessVehicleColor2[id][slot] = 56;
+            BusinessVehicleX[id][slot] = FishingBoatSlotPos[slot][0];
+            BusinessVehicleY[id][slot] = FishingBoatSlotPos[slot][1];
+            BusinessVehicleZ[id][slot] = FishingBoatSlotPos[slot][2];
+            BusinessVehicleA[id][slot] = FishingBoatSlotPos[slot][3];
         }
-        PendingBusinessVehiclePurchase[playerid] = id;
-        PendingBusinessVehicleModel[playerid] = model;
-        PendingBusinessMarketVehicle[playerid] = marketIndex;
-        PendingBusinessMarketVehicleId[playerid] = marketVehicleId;
-        new dialogText[320], dialogTitle[48], vehicleName[32];
-        format(vehicleName, sizeof(vehicleName), "%s", VehicleHudModelNames[model - 400]);
-        format(dialogTitle, sizeof(dialogTitle), "%s", BusinessMarketVehicle[marketIndex][BmvMarketType] == BUSINESS_VEHICLE_MARKET_BOAT ? ("Pijaca Brodova") : ("Pijaca Vozila"));
-        format(dialogText, sizeof(dialogText), "{FFFFFF}Da li zelite kupiti ovo vozilo za svoj biznis?\n\n{00C0FF}Vozilo: {FFFFFF}%s\n{00C0FF}Model ID: {FFFFFF}%d\n{00C0FF}Cijena: {FFFFFF}%d EUR\n{00C0FF}Biznis: {FFFFFF}%s\n{00C0FF}Firmna vozila: {FFFFFF}%d/%d",
-            vehicleName, model, priceEuro, MarketInfo[id][mNaziv], GetBusinessVehicleCount(id), MAX_BUSINESS_VEHICLES);
-        ShowPlayerDialog(playerid, DIALOG_BUSINESS_VEHICLE_BUY, DIALOG_STYLE_MSGBOX, dialogTitle, dialogText, "Kupi", "Odbij");
+        else
+        {
+            BusinessVehicleColor1[id][slot] = c1;
+            BusinessVehicleColor2[id][slot] = c2;
+            GetPlayerPos(playerid, BusinessVehicleX[id][slot], BusinessVehicleY[id][slot], BusinessVehicleZ[id][slot]);
+            GetPlayerFacingAngle(playerid, BusinessVehicleA[id][slot]);
+        }
+        LoadBusinessVehicleSlot(id, slot);
+        SaveMarket(id);
+        new message[128];
+        format(message, sizeof(message), "[BIZNIS]: Kupljeno je firmino vozilo #%d za 100000 RSD.", slot + 1);
+        SendClientMessage(playerid, 0x00FF00FF, message);
         return 1;
     }
-
-    if(!CanManageBusinessHere(playerid,id)) return SendClientMessage(playerid,0xFF7777FF,"[BIZNIS]: Morate biti u blizini svog biznisa.");
 
     new vehicleid = GetPlayerVehicleID(playerid), vehicleBusiness = -1, vehicleSlot = -1;
     if(!vehicleid || !GetBusinessVehicleSlotById(vehicleid, vehicleBusiness, vehicleSlot) || vehicleBusiness != id)
@@ -8822,19 +8342,21 @@ CMD:buybizz(playerid, params[])
         return 1;
     }
 
-    if(PlayerInfo[playerid][pEuro] < MarketInfo[marketid][mCena])
+    new playerEuro = DOF2_IsSet(file, "Euro") ? DOF2_GetInt(file, "Euro") : 0;
+    if(playerEuro < 0) playerEuro = 0;
+    if(playerEuro < MarketInfo[marketid][mCena])
     {
         new string[128];
-        format(string, sizeof(string), "GRESKA: Nemate dovoljno eura! (Imate: %d EUR | Cijena: %d EUR)", PlayerInfo[playerid][pEuro], MarketInfo[marketid][mCena]);
+        format(string, sizeof(string), "GRESKA: Nemate dovoljno eura! (Imate: %d EUR | Cijena: %d EUR)", playerEuro, MarketInfo[marketid][mCena]);
         SendClientMessage(playerid, 0xFF0000FF, string);
         return 1;
     }
 
-    PlayerInfo[playerid][pEuro] -= MarketInfo[marketid][mCena];
+    playerEuro -= MarketInfo[marketid][mCena];
 
     if(DOF2_FileExists(file))
     {
-        DOF2_SetInt(file, "Euro", PlayerInfo[playerid][pEuro]);
+        DOF2_SetInt(file, "Euro", playerEuro);
         DOF2_SetInt(file, "Bizz", marketid);
         DOF2_SaveFile();
     }
@@ -9124,37 +8646,9 @@ stock CheckAdminCommandHierarchy(playerid, const cmdtext[])
     return 1;
 }
 
-stock IsStaffDutyCommand(const cmdtext[])
-{
-    new command[32], lookup[36];
-    if(sscanf(cmdtext, "s[32]", command)) return 0;
-    format(lookup, sizeof(lookup), "|%s|", command);
-
-    static const staffCommands1[] =
-        "|/ah|/ahelp|/name|/jailed|/checkdm|/checkinv|/check|/checklic|/aodg|/pm|/lockgchat|/he|/checkevent|/gotojetn|/setcarhp|/setage|/setskin|/askin|/gethere|/freeze|/unfreeze|/sethp|/setarmor|/getcar|/auntie|/awl|/gotomc|/setjob|/apark|/checkw|/flip|/kill|/cc|";
-    static const staffCommands2[] =
-        "|/ajail|/mute|/unmute|/masked|/kick|/akick|/slap|/napravipoklon|/rpslap|/spec|/specoff|/h|/a|/or|/rtc|/admini|/startevent|/stopevent|/jetpack|/acontracts|/mutegchat|/mutead|/muteaskq|/mutereport|/goto|/gotolist|/gotoautosk|/gotoplanina|/gotoaerodrom|/gotojob|";
-    static const staffCommands3[] =
-        "|/gotopijaca|/gotoboks|/unmuteaskq|/unmutereport|/unmutead|/unmutegchat|/happyhour|/happyjob|/setupozorenja|/setrprank|/dajosiguranje|/dajdpoen|/dajadmina|/dajadmin|/setcodeadmin|/dajhelpera|/setcodehelper|/ban|/unbanip|/setlevel|/specname|/givemoney|/givegun|/restart|/rac|";
-    static const staffCommands4[] =
-        "|/artc|/fix|/artcveh|/afixveh|/bigear|/veh|/sethealth|/setarmour|/sethour|/setminute|/setadmincode|/dajdinamit|/resetbanku|/dajpayday|/napravikucu|/izbrisikucu|/editujkucu|/napravibizz|/editujmarket|/obrisimarket|/gotomarket|/gotopos|/gotomarker|/napravioglase|/editujoglase|";
-    static const staffCommands5[] =
-        "|/obrisioglase|/napravizlataru|/editujzlataru|/obrisizlataru|/setleader|/napravitrafiku|/editujtrafiku|/obrisitrafiku|/kreirajobjekat|/editujobjekt|/obrisiobjekat|/kreirajlabeltrafika|/obrisilabeltrafika|/kreirajlabel|/obrisilabel|/kreirajnpc|/editnpc|/obrisinpc|/npcinfo|/obrisibizz|/jobdebug|/stablo|/editattachedobject|/helperi|";
-    return strfind(staffCommands1, lookup, true) != -1 ||
-        strfind(staffCommands2, lookup, true) != -1 ||
-        strfind(staffCommands3, lookup, true) != -1 ||
-        strfind(staffCommands4, lookup, true) != -1 ||
-        strfind(staffCommands5, lookup, true) != -1;
-}
-
 public OnPlayerCommandReceived(playerid, cmdtext[])
 {
     if(!CheckPlayerAntiSpam(playerid)) return 0;
-    if(IsStaffAccount(playerid) && IsStaffDutyCommand(cmdtext) && !IsStaffOnDuty(playerid))
-    {
-        SendClientMessage(playerid, 0xFF7777FF, "[STAFF]: Morate biti na Admin/Helper duznosti da koristite ovu komandu.");
-        return 0;
-    }
     if(!CheckAdminCommandHierarchy(playerid, cmdtext)) return 0;
     new profanityChannel[24];
     if(GetChatCommandName(cmdtext, profanityChannel, sizeof(profanityChannel)))
@@ -11290,24 +10784,6 @@ stock ShowRevolutionHud(playerid)
     return 1;
 }
 
-stock HideRevolutionHud(playerid)
-{
-    TextDrawHideForPlayer(playerid, TD_NewHud[32]);
-    TextDrawHideForPlayer(playerid, TD_NewHud[33]);
-    PlayerTextDrawHide(playerid, TD_NovacPlavi[playerid]);
-    PlayerTextDrawHide(playerid, TD_Euro[playerid]);
-    PlayerTextDrawHide(playerid, TD_Zlato[playerid]);
-    PlayerTextDrawHide(playerid, TD_Grad[playerid]);
-    PlayerTextDrawHide(playerid, TD_Lokacija[playerid]);
-    PlayerTextDrawHide(playerid, TD_HudDatum[playerid]);
-    PlayerTextDrawHide(playerid, TD_HudVrijeme[playerid]);
-    PlayerTextDrawHide(playerid, TD_WantedHint[playerid]);
-    PlayerTextDrawHide(playerid, TD_WantedStars[playerid]);
-    PlayerTextDrawHide(playerid, RentTextDraw[playerid]);
-    VehicleHudHide(playerid);
-    return 1;
-}
-
 stock VehicleHudNoFuel(model)
 {
     return (model == 481 || model == 509 || model == 510 || model == 449 ||
@@ -11552,7 +11028,6 @@ stock VehicleHudLoadKm(vehicleid)
 
 public OnGameModeExit()
 {
-    if(EuroRateTimer) KillTimer(EuroRateTimer);
     for(new vehicleid = 1; vehicleid <= ZadnjePostarskoVozilo; vehicleid++)
         if(VehicleHudInitialized[vehicleid]) VehicleHudSaveKm(vehicleid);
     for(new i = 0; i < 13; i++) TextDrawDestroy(TD_Auth[i]);
@@ -11793,7 +11268,8 @@ stock UpdateRevolutionHudData(playerid)
     {
         new bank = DOF2_IsSet(file, "Banka") ? DOF2_GetInt(file, "Banka") : 0;
         UpdateBankaTD(playerid, bank);
-        format(label, sizeof(label), "~p~EURO: %d", PlayerInfo[playerid][pEuro]);
+        new euro = DOF2_IsSet(file, "Euro") ? DOF2_GetInt(file, "Euro") : 0;
+        format(label, sizeof(label), "~p~EURO: %d", euro);
         PlayerTextDrawSetString(playerid, TD_Euro[playerid], label);
         PlayerTextDrawShow(playerid, TD_Euro[playerid]);
     }
@@ -15343,8 +14819,11 @@ CMD:preuzmivozilo(playerid, params[])
         DOF2_SaveFile();
     }
 
-    SetPVarInt(playerid, "BR_ParkingPickupPaid", 1);
-    SendClientMessage(playerid, 0x00FF00FF, "[PARKING SERVIS]: Platili ste 500 RSD. Udjite u vozilo i pritisnite H kod kapije.");
+    // Otvaranje kapije
+    MoveObject(kapija_parking, 1022.08948, -927.09814, 38.39440, 3.0);
+    SetTimer("ZatvoriParkingKapiju", 15000, false);
+
+    SendClientMessage(playerid, 0x00FF00FF, "Otvorili ste kapiju Parking Servisa i naplaceno vam je 500 RSD za preuzimanje vozila.");
     return 1;
 }
 forward GladSystemTimer();
@@ -15463,8 +14942,8 @@ public OnPlayerText(playerid, text[])
         for(new viewer = 0; viewer < MAX_PLAYERS; viewer++)
         {
             if(!IsPlayerConnected(viewer)) continue;
-            if(HasAdminCommandAccess(viewer)) SendClientMessage(viewer, 0xFF7777FF, quickAdminMessage);
-            else SendClientMessage(viewer, 0xFF7777FF, quickMessage);
+            if(HasAdminCommandAccess(viewer)) SendClientMessage(viewer, 0xFF6B35FF, quickAdminMessage);
+            else SendClientMessage(viewer, 0xFF6B35FF, quickMessage);
         }
         return 0;
     }
@@ -16678,7 +16157,7 @@ CMD:prekiniposao(playerid, params)
 }
 public OnPlayerUpdate(playerid)
 {
-    if(GetPVarInt(playerid, "BR_StaffVehicleProtect") && GetPlayerState(playerid) == PLAYER_STATE_DRIVER && IsStaffOnDuty(playerid))
+    if(GetPVarInt(playerid, "BR_StaffVehicleProtect") && GetPlayerState(playerid) == PLAYER_STATE_DRIVER)
     {
         new staffVehicle = GetPlayerVehicleID(playerid);
         new Float:staffVehicleHealth;
@@ -16689,7 +16168,7 @@ public OnPlayerUpdate(playerid)
             SetVehicleHealth(staffVehicle, 1000.0);
         }
     }
-    else if(GetPVarInt(playerid, "BR_StaffVehicleProtect")) DeletePVar(playerid, "BR_StaffVehicleProtect");
+    else if(GetPlayerState(playerid) != PLAYER_STATE_DRIVER) DeletePVar(playerid, "BR_StaffVehicleProtect");
 
     new nativeWanted = GetPlayerWantedLevel(playerid);
     if(nativeWanted > 0 && GetPlayerState(playerid) != PLAYER_STATE_WASTED &&
@@ -17058,7 +16537,7 @@ stock ShowAllCommands(playerid)
     strcat(text, "/mp3 /stats /help /pravila /dajadmina /dajadmin /setcodeadmin\n", sizeof(text));
     strcat(text, "/admini /adminduty /dajhelpera /hduty /helperi /setcodehelper\n", sizeof(text));
     strcat(text, "/napravikucu /izbrisikucu /editujkucu /jetpack /buyhouse /gotohouse /sellhouse\n", sizeof(text));
-    strcat(text, "/lockhouse /unlockhouse /napravibizz /editujmarket /obrisimarket /buybizz /sellbizz\n", sizeof(text));
+    strcat(text, "/lockhouse /unlockhouse /napravibizz /editujmarket /obrisimarket /buybizz /sellbizz /bizzhelp\n", sizeof(text));
     strcat(text, "/psellto /bizzinfo /priceproducts /esterbon /uklonisuvlasnika /bizzname /bizzfee /bizzbank /keepingbizz /kupifakture /ob /obcolor\n", sizeof(text));
     strcat(text, "/gotomarket /kick /ban /setlevel /unbanip /gotopos /gotomarker\n", sizeof(text));
     strcat(text, "/kupitelefon /kupibrojtel /kupislusalice /mp3 /ugasimp3 /skinidodatke /editattachedobject /lideri /inventory /buyinventory /kupi /smsad\n", sizeof(text));
@@ -17070,7 +16549,7 @@ stock ShowAllCommands(playerid)
     strcat(text, "/givemoney /givegun /restart /rac /rtc /artc /fix /artcveh /afixveh\n", sizeof(text));
     strcat(text, "/call /acceptfaren /duty /f /d /o /giverank /preuzmivozilo /bigear /veh\n", sizeof(text));
     strcat(text, "/posao /otkaz /smjena /jobinfo /prodajribu /kupimamac /kupistap /mamac /jobhelp /jobdebug /engine /dovezipostu /prekiniposao /sethealth /setarmour\n", sizeof(text));
-    strcat(text, "/uninviteme /stablo /sethour /setminute /specname /setadmincode /unrent /rentvehiclehelp /otvoriracun /kupieuro /prodajeuro /kursnalista\n", sizeof(text));
+    strcat(text, "/uninviteme /stablo /sethour /setminute /specname /setadmincode /unrent /rentvehiclehelp /otvoriracun\n", sizeof(text));
     strcat(text, "/iskljucilasere /dajdinamit /resetbanku /postavidinamit /robbank\n", sizeof(text));
     strcat(text, "/happyhour /happyjob /dajpayday /setupozorenja /setrprank /dajosiguranje /dajdpoen\n", sizeof(text));
     strcat(text, "\n{33CCFF}Junior Admin komande:{FFFFFF}\n", sizeof(text));
@@ -17106,9 +16585,9 @@ CMD:ahelp(playerid, params[]) return ShowAllCommands(playerid);
 
 public HasSpecialCommandAccess(playerid)
 {
+    if(IsPlayerAdmin(playerid)) return 1;
     new file[128];
-    return GetPlayerAccountPath(playerid, file, sizeof(file)) && DOF2_GetInt(file, "AdminDuty") == 1 &&
-        (IsPlayerAdmin(playerid) || DOF2_GetInt(file, "Admin") >= 9);
+    return GetPlayerAccountPath(playerid, file, sizeof(file)) && DOF2_GetInt(file, "Admin") >= 9;
 }
 
 stock SetSpecialPlayerValue(playerid, targetid, key[], value, label[])
@@ -17713,8 +17192,7 @@ CMD:otvoripoklon(playerid,params[])
         UpdateZlatoTD(playerid);
         format(m,sizeof(m),"[POKLON]: Dobili ste %d zlata.",amount);
         }case 7:{amount=10+random(191);
-    if(PlayerInfo[playerid][pEuro] <= MAX_EURO_BALANCE-amount) PlayerInfo[playerid][pEuro]+=amount;
-    DOF2_SetInt(f,"Euro",PlayerInfo[playerid][pEuro]); UpdateRevolutionHudData(playerid);
+    DOF2_SetInt(f,"Euro",DOF2_GetInt(f,"Euro")+amount);
         format(m,sizeof(m),"[POKLON]: Dobili ste %d eura.",amount);
         }case 8:{SetPlayerScore(playerid,GetPlayerScore(playerid)+1);
     DOF2_SetInt(f,"Level",GetPlayerScore(playerid));
@@ -17786,7 +17264,7 @@ CMD:specoff(playerid, params[])
 
 stock HasStaffChatAccess(playerid)
 {
-    if(HasAdminCommandAccess(playerid))return 1;new f[128];if(!JuniorAdminFile(playerid,f,sizeof(f)))return 0;return DOF2_GetInt(f,"Helper")>0&&DOF2_GetInt(f,"HDuty")==1;
+    if(HasAdminCommandAccess(playerid))return 1;new f[128];if(!JuniorAdminFile(playerid,f,sizeof(f)))return 0;return DOF2_GetInt(f,"Helper")>0;
 }
 stock JuniorStaffChat(playerid,const channel[],const msg[])
 {

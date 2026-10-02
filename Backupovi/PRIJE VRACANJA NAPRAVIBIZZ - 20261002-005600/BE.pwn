@@ -2799,29 +2799,18 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
     {
         case DIALOG_CREATE_JOB_BUSINESS:
         {
-            if(!response)
-            {
-                PendingBusinessCreateType[playerid] = BIZ_TYPE_NONE;
-                PendingBusinessCreatePrice[playerid] = 0;
-                PendingBusinessCreateLevel[playerid] = 0;
-                PendingBusinessCreateName[playerid][0] = EOS;
-                return 1;
-            }
+            if(!response) return 1;
             new jobid = listitem + 1;
             if(jobid < JOB_CISTAC_ULICA || jobid > JOB_RIBOLOVAC || PendingBusinessCreateType[playerid] != BIZ_TYPE_JOB) return 1;
-            new businessName[32], price = PendingBusinessCreatePrice[playerid], level = PendingBusinessCreateLevel[playerid];
-            format(businessName, sizeof(businessName), "%s", PendingBusinessCreateName[playerid]);
-            PendingBusinessCreateType[playerid] = BIZ_TYPE_NONE;
-            PendingBusinessCreatePrice[playerid] = 0;
-            PendingBusinessCreateLevel[playerid] = 0;
-            PendingBusinessCreateName[playerid][0] = EOS;
-            new businessid = CreateBusinessAtPlayer(playerid, BIZ_TYPE_JOB, jobid, businessName, price, level);
+            new businessid = CreateBusinessAtPlayer(playerid, BIZ_TYPE_JOB, jobid, PendingBusinessCreateName[playerid],
+                PendingBusinessCreatePrice[playerid], PendingBusinessCreateLevel[playerid]);
             if(businessid == -2) return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Za izabrani posao vec postoji biznis.");
             if(businessid < 0) return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Nema slobodnog mjesta za novi biznis.");
             new jobName[32], message[160];
             GetJobName(jobid, jobName, sizeof(jobName));
-            format(message, sizeof(message), "Kreiran je job biznis '%s' (ID %d) za posao %s.", businessName, businessid, jobName);
+            format(message, sizeof(message), "Kreiran je job biznis '%s' (ID %d) za posao %s.", PendingBusinessCreateName[playerid], businessid, jobName);
             SendClientMessage(playerid, 0x00BFFFFF, message);
+            PendingBusinessCreateType[playerid] = BIZ_TYPE_NONE;
             return 1;
         }
         case DIALOG_COOWNER_OFFER:
@@ -7946,27 +7935,16 @@ stock CreateBusinessAtPlayer(playerid, type, jobid, const name[], price, level)
     return businessid;
 }
 
-stock ParseCreateBusinessParams(const params[], name[], nameSize, &type, &price, &level)
+stock ParseCreateBusinessParams(const params[], name[], nameSize, &jobid, &price, &level)
 {
-    if(!strlen(params)) return 0;
-    new offset;
-    if(params[0] == '[')
-    {
-        new closing = strfind(params, "]", false);
-        if(closing < 2 || closing + 1 >= nameSize) return 0;
-        strmid(name, params, 0, closing + 1, nameSize);
-        offset = closing + 1;
-    }
-    else
-    {
-        new separator = strfind(params, " ", false);
-        if(separator < 1 || separator >= nameSize) return 0;
-        strmid(name, params, 0, separator, nameSize);
-        offset = separator;
-    }
+    if(!strlen(params) || params[0] != '[') return 0;
+    new closing = strfind(params, "]", false);
+    if(closing < 2 || closing + 1 >= nameSize) return 0;
+    strmid(name, params, 0, closing + 1, nameSize);
+    new offset = closing + 1;
     while(params[offset] == ' ') offset++;
     if(!strlen(params[offset])) return 0;
-    return sscanf(params[offset], "iii", type, price, level) == 0;
+    return sscanf(params[offset], "iii", jobid, price, level) == 0;
 }
 
 CMD:napravibizz(playerid, params[])
@@ -7978,42 +7956,23 @@ CMD:napravibizz(playerid, params[])
     if(!IsPlayerAdmin(playerid) && adminLevel < RANK_VLASNIK)
         return SendClientMessage(playerid, 0xFF0000FF, "GRESKA: Komandu moze koristiti samo Vlasnik.");
 
-    new name[32], type, price, level;
-    if(!ParseCreateBusinessParams(params, name, sizeof(name), type, price, level))
+    new name[32], jobid, price, level;
+    if(!ParseCreateBusinessParams(params, name, sizeof(name), jobid, price, level))
     {
-        SendClientMessage(playerid, 0x00BFFFFF, "KORISCENJE: {FFFFFF}/napravibizz [Ime biznisa] [ID Biznisa] [Cijena EUR] [Level]");
-        SendClientMessage(playerid, 0xAFAFAFFF, "ID Biznisa:");
-        for(new businessType = BIZ_TYPE_MARKET; businessType <= MAX_BUSINESS_TYPE; businessType++)
-        {
-            new typeName[32], line[64];
-            GetBusinessTypeName(businessType, typeName, sizeof(typeName));
-            format(line, sizeof(line), "%d. %s", businessType, typeName);
-            SendClientMessage(playerid, 0xAFAFAFFF, line);
-        }
-        SendClientMessage(playerid, 0xAFAFAFFF, "Primjer: /napravibizz [RIBAR] 2 50000 20");
+        SendClientMessage(playerid, 0x00BFFFFF, "KORISCENJE: {FFFFFF}/napravibizz [Ime posla] [ID posla] [Cijena u EUR] [Level]");
+        SendClientMessage(playerid, 0xAFAFAFFF, "Primjer: /napravibizz [RIBARSKA FIRMA] 3 50000 5");
         return 1;
     }
-    if(type < BIZ_TYPE_MARKET || type > MAX_BUSINESS_TYPE)
-        return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Unesite postojeci ID biznisa sa liste.");
+    if(jobid < JOB_CISTAC_ULICA || jobid > JOB_RIBOLOVAC)
+        return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Unesite postojeci ID posla (1-3).");
     if(price < 1 || level < 1)
         return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Cijena u eurima i level moraju biti veci od nule.");
-
-    if(type == BIZ_TYPE_JOB)
-    {
-        PendingBusinessCreateType[playerid] = type;
-        PendingBusinessCreatePrice[playerid] = price;
-        PendingBusinessCreateLevel[playerid] = level;
-        format(PendingBusinessCreateName[playerid], 32, "%s", name);
-        ShowPlayerDialog(playerid, DIALOG_CREATE_JOB_BUSINESS, DIALOG_STYLE_LIST,
-            "{66CCFF}Izaberite posao", "Cistac ulica\nPostar\nRibolovac", "Izaberi", "Odustani");
-        return 1;
-    }
-
-    new businessid = CreateBusinessAtPlayer(playerid, type, JOB_NONE, name, price, level);
+    new businessid = CreateBusinessAtPlayer(playerid, BIZ_TYPE_JOB, jobid, name, price, level);
+    if(businessid == -2) return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Za izabrani posao vec postoji biznis.");
     if(businessid < 0) return SendClientMessage(playerid, 0xFF7777FF, "GRESKA: Nema slobodnog mjesta za novi biznis.");
-    new message[192], typeName[32];
-    GetBusinessTypeName(type, typeName, sizeof(typeName));
-    format(message, sizeof(message), "Kreiran je %s '%s' (ID %d). Cijena: %d EUR | Level: %d.", typeName, name, businessid, price, level);
+    new message[192], jobName[32];
+    GetJobName(jobid, jobName, sizeof(jobName));
+    format(message, sizeof(message), "Kreiran je biznis %s (ID %d) za posao %s. Cijena: %d EUR | Level: %d.", name, businessid, jobName, price, level);
     SendClientMessage(playerid, 0x00BFFFFF, message);
     return 1;
 }
